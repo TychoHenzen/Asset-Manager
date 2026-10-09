@@ -101,9 +101,15 @@ static func _write_import_settings(dest_path: String, external: Dictionary, resu
 
 	var config := ConfigFile.new()
 	config.set_value("remap", "importer", "scene")
+	config.set_value("remap", "importer_version", 1)
 	config.set_value("remap", "type", "PackedScene")
 	config.set_value("deps", "source_file", dest_path)
 	config.set_value("params", "_subresources", {"materials": materials})
+	# Without these Godot reads the file as written before 4.3: FBX2glTF
+	# instead of ufbx, and the old naming scheme, under which the material
+	# names above would not match.
+	config.set_value("params", "fbx/importer", 0)
+	config.set_value("params", "fbx/naming_version", 2)
 	var err := config.save(ProjectSettings.globalize_path(import_path))
 	if err != OK:
 		result["errors"].append("Could not write import settings (%d): %s" % [err, import_path])
