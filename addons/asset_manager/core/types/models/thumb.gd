@@ -33,13 +33,16 @@ static func render_prepared(prepared: Variant, viewport: ThumbnailViewport, path
 	return await viewport.capture(subject)
 
 static func _load(path: String) -> Node3D:
-	var state := GLTFState.new()
+	# FBXDocument rejects a plain GLTFState (fbx_document.cpp:2261), it needs
+	# its own subclass.
+	var is_fbx := path.get_extension().to_lower() == "fbx"
+	var state: GLTFState = FBXState.new() if is_fbx else GLTFState.new()
 	state.handle_binary_image_mode = GLTFState.HANDLE_BINARY_IMAGE_MODE_EMBED_AS_UNCOMPRESSED
 
 	var err: int = FAILED
 	var node: Node = null
 
-	if path.get_extension().to_lower() == "fbx":
+	if is_fbx:
 		var fbx := FBXDocument.new()
 		err = fbx.append_from_file(path, state)
 		if err == OK:

@@ -2,7 +2,14 @@
 class_name CoverArtExtractor
 extends RefCounted
 
+## The embedded art as a texture, for the preview panel.
 static func extract(path: String) -> Texture2D:
+	var image := extract_image(path)
+	return ImageTexture.create_from_image(image) if image != null else null
+
+## The embedded art as an Image. Touches no server, so it is safe on a worker
+## thread, which is where thumbnails call it from.
+static func extract_image(path: String) -> Image:
 	var file := FileAccess.open(path, FileAccess.READ)
 	if not file:
 		return null
@@ -38,7 +45,7 @@ static func extract(path: String) -> Texture2D:
 
 	return null
 
-static func _parse_apic(file: FileAccess, frame_size: int) -> Texture2D:
+static func _parse_apic(file: FileAccess, frame_size: int) -> Image:
 	var frame_start := file.get_position()
 	var frame_end := frame_start + frame_size
 
@@ -65,7 +72,7 @@ static func _parse_apic(file: FileAccess, frame_size: int) -> Texture2D:
 	if err != OK:
 		return null
 
-	return ImageTexture.create_from_image(img)
+	return img
 
 ## Plain big-endian 32-bit read.
 static func _read_be_32(file: FileAccess) -> int:

@@ -17,7 +17,7 @@ namespace AssetManager.Bridge;
 /// GDScript lambdas (seen on 4.7.1).
 [Tool]
 [GlobalClass]
-public partial class AssetCatalog : RefCounted
+public partial class AssetCatalog : RefCounted, ISerializationListener
 {
 	/// `needsScan`: there was no catalog.bin, the workspace is new or was only
 	/// migrated from index.db (which has no file sizes).
@@ -41,9 +41,14 @@ public partial class AssetCatalog : RefCounted
 	private CancellationTokenSource? _scanCancel;
 	private int _subtypeSaveQueued;
 
+	// Strings and bools survive a C# assembly reload; the catalog itself does
+	// not. These are what OnAfterDeserialize needs to rebuild it.
+	private string _typesJson = "";
+	private bool _scanning;
+
 	public string WorkspacePath { get; private set; } = "";
 
-	public bool IsScanning => _scanCancel != null;
+	public bool IsScanning => _scanning;
 
 	public int Count => _catalog.Count;
 
@@ -51,8 +56,32 @@ public partial class AssetCatalog : RefCounted
 	public void Setup(string workspacePath, string typesJson)
 	{
 		WorkspacePath = workspacePath.TrimEnd('/');
+		_typesJson = typesJson;
 		_catalog = new Catalog(CatalogJson.ParseTypes(typesJson));
 		_store = new CatalogStore(WorkspacePath);
+	}
+
+	public void OnBeforeSerialize()
+	{
+		// BackgroundWork's unload hook has already stopped every task.
+	}
+
+	/// Godot rebuilds C# tool objects after every build in the project and
+	/// keeps only Variant-compatible fields, so the catalog comes back empty.
+	/// It is reloaded from disk here; Opened tells the UI to redraw. A scan
+	/// cut off by the reload is reported as stopped so the UI stops waiting.
+	public void OnAfterDeserialize()
+	{
+		_subtypeSaveQueued = 0;
+		if (WorkspacePath.Length == 0 || _typesJson.Length == 0)
+			return;
+
+		var interrupted = _scanning;
+		_scanning = false;
+		Setup(WorkspacePath, _typesJson);
+		if (interrupted)
+			BackgroundWork.OnMainThread(() => EmitSignal(SignalName.ScanFinished, 0, 0, 0, 0, true, WorkspacePath, 0.0));
+		Open();
 	}
 
 	/// Loads catalog.bin, or migrates an old index.db. Emits Opened.
@@ -72,9 +101,10 @@ public partial class AssetCatalog : RefCounted
 	/// changed into the catalog. Returns false when a scan is already running.
 	public bool Scan(string absoluteRoot)
 	{
-		if (_scanCancel != null)
+		if (_scanning)
 			return false;
 
+		_scanning = true;
 		var cancel = CancellationTokenSource.CreateLinkedTokenSource(_work.Token);
 		_scanCancel = cancel;
 		var root = WorkspacePaths.Relative(WorkspacePath, absoluteRoot);
@@ -118,7 +148,7 @@ public partial class AssetCatalog : RefCounted
 	/// 32 bytes when nothing changed.
 	public void CheckStale()
 	{
-		if (_scanCancel != null)
+		if (_scanning)
 			return;
 		_work.Run(_ =>
 		{
@@ -178,7 +208,7 @@ public partial class AssetCatalog : RefCounted
 	{
 		var started = DateTime.UtcNow;
 		var progress = new ThrottledProgress(ProgressInterval, p =>
-			Report("scan", p.CurrentFolder.Length > 0 ? $"{p.FilesSeen:N0} files  ·  {p.CurrentFolder}" : $"{p.FilesSeen:N0} files", p.FilesSeen, 0));
+			Report("scan", p.CurrentFolder.Length > 0 ? $"{p.FilesSeen:N0} files - {p.CurrentFolder}" : $"{p.FilesSeen:N0} files", p.FilesSeen, 0));
 		var summary = new ScanSummary();
 		var cancelled = false;
 		try
@@ -204,6 +234,7 @@ public partial class AssetCatalog : RefCounted
 			{
 				_scanCancel?.Dispose();
 				_scanCancel = null;
+				_scanning = false;
 				EmitSignal(SignalName.ScanFinished, summary.Added, summary.Changed, summary.Removed, total, cancelled, absoluteRoot, seconds);
 			});
 		}

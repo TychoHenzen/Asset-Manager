@@ -16,7 +16,7 @@ namespace AssetManager.Bridge;
 /// connected to a C# object's signal crashes Godot on exit (seen on 4.7.1).
 [Tool]
 [GlobalClass]
-public partial class ThumbnailService : RefCounted
+public partial class ThumbnailService : RefCounted, ISerializationListener
 {
 	/// `webp` is the encoded thumbnail; decode with Image.load_webp_from_buffer.
 	/// Bytes rather than an Image, so no C# Image wrapper outlives the call.
@@ -37,6 +37,16 @@ public partial class ThumbnailService : RefCounted
 	private string _workspace = "";
 
 	public void Setup(string workspacePath) => _workspace = workspacePath.TrimEnd('/');
+
+	public void OnBeforeSerialize()
+	{
+		// BackgroundWork's unload hook has already stopped the workers.
+	}
+
+	/// The worker count is an int, so a C# assembly reload keeps it while the
+	/// workers it counted are gone; left alone, no worker would ever start
+	/// again. The grid requests its page anew when it next refreshes.
+	public void OnAfterDeserialize() => _activeWorkers = 0;
 
 	/// The parallel arrays are one QueryReady page, as the grid received it.
 	public void RequestPage(int requestId, string[] paths, string[] types, long[] sizes, long[] mtimes)

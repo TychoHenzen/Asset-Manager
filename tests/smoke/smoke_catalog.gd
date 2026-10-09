@@ -136,8 +136,28 @@ func _check_incremental_on_temp_workspace() -> void:
 	var again: Array = await reopened.Opened
 	_expect(again[0] == 3 and again[1] == false, "reopened catalog has %d assets" % again[0])
 
+	# A tag edit writes tags.bin only; catalog.bin keeps its bytes.
+	var catalog_bin := root.path_join(".assetmanager/catalog.bin")
+	var catalog_bytes := FileAccess.get_file_as_bytes(catalog_bin)
+	var tags_bin := root.path_join(".assetmanager/tags.bin")
+	var tagged := root.path_join("images/vendor/pack_a/one.png")
+	reopened.SetTags(tagged, PackedStringArray(["hero"]))
+	var waited := 0
+	while not FileAccess.file_exists(tags_bin) and waited < 300:
+		waited += 1
+		await process_frame
+	_expect(FileAccess.file_exists(tags_bin), "SetTags did not write tags.bin")
+	_expect(FileAccess.get_file_as_bytes(catalog_bin) == catalog_bytes, "SetTags rewrote catalog.bin")
+
+	var third := AssetCatalog.new()
+	third.Setup(root, _types_json)
+	third.Open()
+	await third.Opened
+	_expect(Array(third.TagsOf(tagged)) == ["hero"], "tag did not survive a reopen: %s" % [third.TagsOf(tagged)])
+
 	catalog.Shutdown()
 	reopened.Shutdown()
+	third.Shutdown()
 
 ## Bound methods, not lambdas: see the note on AssetCatalog.
 func _on_thumbnail_ready(_id: int, _path: String, webp: PackedByteArray) -> void:
