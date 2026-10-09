@@ -1,2 +1,18 @@
 /docs
 /tools
+
+# Godot editor cache and export output
+.godot/
+/android/
+
+# .NET build output (Godot.NET.Sdk and the test project)
+bin/
+obj/
+.vs/
+*.user
+
+# Local sample packs used to exercise the addon by hand, not source
+/assets/
+
+# Written by the addon into any workspace it opens (index, thumbnails)
+.assetmanager/
