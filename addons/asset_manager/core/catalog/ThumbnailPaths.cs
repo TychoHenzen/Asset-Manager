@@ -14,9 +14,6 @@ public static class ThumbnailPaths
 	public static string For(string workspace, string typeId, string key) =>
 		$"{workspace.TrimEnd('/')}/{CatalogStore.DirName}/thumbnails/{(typeId.Length > 0 ? typeId : "other")}/{key[..ShardLength]}/{key}.{Extension}";
 
-	public static string ForRecord(string workspace, string typeId, AssetRecord record) =>
-		For(workspace, typeId, TextRules.ThumbnailKey(AbsolutePath(workspace, record.RelPath), record.MTime, record.Size));
-
-	public static string AbsolutePath(string workspace, string relPath) =>
-		workspace.TrimEnd('/') + "/" + relPath;
+	public static string ForAsset(string workspace, string typeId, string absolutePath, long mtime, long size) =>
+		For(workspace, typeId, TextRules.ThumbnailKey(absolutePath, mtime, size));
 }

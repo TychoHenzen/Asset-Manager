@@ -11,6 +11,9 @@ public sealed class CatalogStore
 {
 	public const string DirName = ".assetmanager";
 
+	// A scan and a delayed subtype save can both want to write catalog.bin,
+	// and they share one temp file name.
+	private readonly object _writeGate = new();
 	private long _catalogGeneration;
 	private long _tagsGeneration;
 
@@ -49,14 +52,23 @@ public sealed class CatalogStore
 
 	public void SaveCatalog(Catalog catalog)
 	{
-		var generation = NextGeneration(CatalogPath, CatalogFile.Magic, _catalogGeneration);
-		StoreHeader.WriteAtomically(CatalogPath, CatalogFile.Serialize(catalog.Snapshot(), catalog.Types, generation));
-		_catalogGeneration = generation;
+		lock (_writeGate)
+		{
+			var generation = NextGeneration(CatalogPath, CatalogFile.Magic, _catalogGeneration);
+			StoreHeader.WriteAtomically(CatalogPath, CatalogFile.Serialize(catalog.Snapshot(), catalog.Types, generation));
+			_catalogGeneration = generation;
+		}
 	}
 
 	/// If another machine saved tags since we loaded, its overrides are folded
 	/// in first, except for `editedPath`, which this save is about.
 	public void SaveTags(Catalog catalog, string editedPath)
+	{
+		lock (_writeGate)
+			SaveTagsLocked(catalog, editedPath);
+	}
+
+	private void SaveTagsLocked(Catalog catalog, string editedPath)
 	{
 		if (StoreHeader.PeekGeneration(TagsPath, TagOverridesFile.Magic) > _tagsGeneration)
 		{
