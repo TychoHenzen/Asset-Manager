@@ -25,7 +25,12 @@ internal static class Fixtures
 	public static Catalog CatalogWith(params FoundFile[] files)
 	{
 		var catalog = new Catalog(Types());
-		catalog.ApplyScan("", files, now: 500, _ => "");
+		catalog.ApplyFiles("", files, now: 500, _ => "");
 		return catalog;
 	}
+
+	/// ApplyScan for a walk that found `files`, with `vendorRoots` marked.
+	public static ScanSummary ApplyFiles(this Catalog catalog, string scanRoot, IEnumerable<FoundFile> files, long now,
+		Func<string, string> resourceTypeOf, params string[] vendorRoots) =>
+		catalog.ApplyScan(scanRoot, new ScanResult(files.ToList(), new HashSet<string>(vendorRoots)), now, resourceTypeOf);
 }

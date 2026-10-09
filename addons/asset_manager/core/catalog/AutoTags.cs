@@ -34,10 +34,14 @@ public static class AutoTags
 	};
 
 	/// `relativeDir` is the file's folder below its bucket, "/"-separated, ""
-	/// for a file sitting directly in the bucket.
-	public static List<string> Build(string relativeDir, TypeTable types)
+	/// for a file sitting directly in the bucket. `typeTag` (the bucket's type
+	/// id, for files under a vendor marker) leads the list; it is a type id,
+	/// which the noise rule would otherwise drop.
+	public static List<string> Build(string relativeDir, TypeTable types, string? typeTag = null)
 	{
 		var tags = new List<string>();
+		if (typeTag != null)
+			tags.Add(typeTag);
 		if (relativeDir.Length == 0)
 			return tags;
 

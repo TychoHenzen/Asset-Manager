@@ -130,6 +130,15 @@ func _check_incremental_on_temp_workspace() -> void:
 	print("scoped rescan: added %d removed %d total %d" % [scoped[0], scoped[2], scoped[3]])
 	_expect(scoped[0] == 1 and scoped[2] == 0 and scoped[3] == 3, "scoped rescan of a new pack: %s" % [scoped])
 
+	# A vendor marker added later retags the vendor's unchanged files.
+	VendorMarker.ensure(root.path_join("images/vendor"))
+	catalog.Scan(root)
+	var marked: Array = await catalog.ScanFinished
+	print("rescan after marker: changed %d retagged %d" % [marked[1], marked[7]])
+	_expect(marked[1] == 0 and marked[7] == 3, "marker rescan: %s" % [marked])
+	_expect(Array(catalog.TagsOf(root.path_join("images/vendor/pack_a/one.png"))) == ["images", "vendor", "pack_a"],
+		"marked tags: %s" % [catalog.TagsOf(root.path_join("images/vendor/pack_a/one.png"))])
+
 	var reopened := AssetCatalog.new()
 	reopened.Setup(root, _types_json)
 	reopened.Open()

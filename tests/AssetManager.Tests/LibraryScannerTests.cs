@@ -11,7 +11,7 @@ public class LibraryScannerTests
 		var stamp = new DateTime(2025, 1, 2, 3, 4, 5, DateTimeKind.Utc);
 		ws.Write("images/vendor/pack/hero.png", "12345", stamp);
 
-		var found = LibraryScanner.Walk(ws.Root, "", Fixtures.Types(), null, CancellationToken.None);
+		var found = LibraryScanner.Walk(ws.Root, "", Fixtures.Types(), null, CancellationToken.None).Files;
 
 		var file = Assert.Single(found);
 		Assert.Equal("images/vendor/pack/hero.png", file.RelPath);
@@ -27,7 +27,7 @@ public class LibraryScannerTests
 		ws.Write("notatype/b.png");
 		ws.Write(".assetmanager/thumbnails/images/aa/x.webp");
 
-		var found = LibraryScanner.Walk(ws.Root, "", Fixtures.Types(), null, CancellationToken.None);
+		var found = LibraryScanner.Walk(ws.Root, "", Fixtures.Types(), null, CancellationToken.None).Files;
 
 		Assert.Equal(["images/a.png"], found.Select(f => f.RelPath));
 	}
@@ -39,7 +39,7 @@ public class LibraryScannerTests
 		ws.Write("images/one/a.png");
 		ws.Write("images/two/b.png");
 
-		var found = LibraryScanner.Walk(ws.Root, "images/two", Fixtures.Types(), null, CancellationToken.None);
+		var found = LibraryScanner.Walk(ws.Root, "images/two", Fixtures.Types(), null, CancellationToken.None).Files;
 
 		Assert.Equal(["images/two/b.png"], found.Select(f => f.RelPath));
 	}

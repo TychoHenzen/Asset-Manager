@@ -17,6 +17,7 @@ static func ingest_asset(source_path: String, bucket: String, folder_name: Strin
 	var bucket_root := workspace_path.path_join(bucket)
 	if not vendor.is_empty():
 		bucket_root = bucket_root.path_join(vendor)
+		VendorMarker.ensure(bucket_root)
 	var pack_dest_root := bucket_root.path_join(folder_name)
 	var dest_path := pack_dest_root.path_join(absolute_source.get_file())
 

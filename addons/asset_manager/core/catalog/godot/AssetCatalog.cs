@@ -23,7 +23,9 @@ public partial class AssetCatalog : RefCounted, ISerializationListener
 	/// migrated from index.db (which has no file sizes).
 	[Signal] public delegate void OpenedEventHandler(int count, bool needsScan);
 	[Signal] public delegate void ScanProgressedEventHandler(string stage, string label, int current, int total);
-	[Signal] public delegate void ScanFinishedEventHandler(int added, int changed, int removed, int total, bool cancelled, string root, double seconds);
+	/// `retagged`: unchanged files whose folder tags changed (a vendor marker was
+	/// added or removed above them).
+	[Signal] public delegate void ScanFinishedEventHandler(int added, int changed, int removed, int total, bool cancelled, string root, double seconds, int retagged);
 	[Signal] public delegate void QueryReadyEventHandler(int requestId, string[] paths, string[] types, long[] sizes, long[] mtimes, int total, int page, int totalPages);
 
 	/// `statsJson` has the shape sidebar._gather_stats returned.
@@ -80,7 +82,7 @@ public partial class AssetCatalog : RefCounted, ISerializationListener
 		_scanning = false;
 		Setup(WorkspacePath, _typesJson);
 		if (interrupted)
-			BackgroundWork.OnMainThread(() => EmitSignal(SignalName.ScanFinished, 0, 0, 0, 0, true, WorkspacePath, 0.0));
+			BackgroundWork.OnMainThread(() => EmitSignal(SignalName.ScanFinished, 0, 0, 0, 0, true, WorkspacePath, 0.0, 0));
 		Open();
 	}
 
@@ -213,9 +215,9 @@ public partial class AssetCatalog : RefCounted, ISerializationListener
 		var cancelled = false;
 		try
 		{
-			var found = LibraryScanner.Walk(WorkspacePath, root, _catalog.Types, progress, token);
+			var walk = LibraryScanner.Walk(WorkspacePath, root, _catalog.Types, progress, token);
 			Report("database", "Updating index", 0, 1);
-			summary = _catalog.ApplyScan(root, found, DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+			summary = _catalog.ApplyScan(root, walk, DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
 				rel => ResourceHeader.TypeOf(Path.Combine(WorkspacePath, rel)));
 			if (summary.AnythingChanged || !File.Exists(_store.CatalogPath))
 				_store.SaveCatalog(_catalog);
@@ -235,7 +237,7 @@ public partial class AssetCatalog : RefCounted, ISerializationListener
 				_scanCancel?.Dispose();
 				_scanCancel = null;
 				_scanning = false;
-				EmitSignal(SignalName.ScanFinished, summary.Added, summary.Changed, summary.Removed, total, cancelled, absoluteRoot, seconds);
+				EmitSignal(SignalName.ScanFinished, summary.Added, summary.Changed, summary.Removed, total, cancelled, absoluteRoot, seconds, summary.Retagged);
 			});
 		}
 	}

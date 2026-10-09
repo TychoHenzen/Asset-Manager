@@ -25,7 +25,8 @@ public static class LibraryScanner
 
 	/// `scanRoot` is workspace-relative: "" walks every type bucket, anything
 	/// else walks that subtree only and must start with a type folder.
-	public static List<FoundFile> Walk(
+	/// Vendor marker files are reported as vendor roots, not as files.
+	public static ScanResult Walk(
 		string workspaceRoot,
 		string scanRoot,
 		TypeTable types,
@@ -34,6 +35,7 @@ public static class LibraryScanner
 	{
 		var rootFull = Path.TrimEndingDirectorySeparator(Path.GetFullPath(workspaceRoot));
 		var found = new List<FoundFile>();
+		var vendorRoots = MarkedAncestors(rootFull, scanRoot);
 
 		foreach (var relRoot in RootsFor(scanRoot, types))
 		{
@@ -55,6 +57,11 @@ public static class LibraryScanner
 
 			foreach (var file in walk)
 			{
+				if (RelPaths.FileName(file.RelPath) == VendorMarker.FileName)
+				{
+					vendorRoots.Add(RelPaths.Parent(file.RelPath));
+					continue;
+				}
 				found.Add(file);
 				if (progress != null && found.Count % ProgressEvery == 0)
 					progress.Report(new ScanProgress(found.Count, RelPaths.Parent(file.RelPath)));
@@ -62,7 +69,24 @@ public static class LibraryScanner
 		}
 
 		progress?.Report(new ScanProgress(found.Count, ""));
-		return found;
+		return new ScanResult(found, vendorRoots);
+	}
+
+	/// A scoped scan starts below the vendor folder, so the walk never sees the
+	/// marker; the folders above the scan root are checked directly instead.
+	/// One existence check per level, a handful at most.
+	private static HashSet<string> MarkedAncestors(string rootFull, string scanRoot)
+	{
+		var marked = new HashSet<string>(StringComparer.Ordinal);
+		var slash = scanRoot.IndexOf('/');
+		while (slash > 0)
+		{
+			var ancestor = scanRoot[..slash];
+			if (File.Exists(Path.Combine(rootFull, ancestor.Replace('/', Path.DirectorySeparatorChar), VendorMarker.FileName)))
+				marked.Add(ancestor);
+			slash = scanRoot.IndexOf('/', slash + 1);
+		}
+		return marked;
 	}
 
 	private static IEnumerable<string> RootsFor(string scanRoot, TypeTable types)

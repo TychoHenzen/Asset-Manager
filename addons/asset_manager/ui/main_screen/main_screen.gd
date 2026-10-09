@@ -193,12 +193,12 @@ func _on_stop_scan() -> void:
 func _on_scan_progressed(stage: String, label: String, current: int, total: int) -> void:
 	_progress_dialog.on_progress({"stage": stage, "label": label, "current": current, "total": total})
 
-func _on_scan_finished(added: int, changed: int, removed: int, total: int, cancelled: bool, root: String, seconds: float) -> void:
+func _on_scan_finished(added: int, changed: int, removed: int, total: int, cancelled: bool, root: String, seconds: float, retagged: int) -> void:
 	_progress_dialog.finish()
 	toolbar.set_scanning(false)
-	print("AssetManager: scanned %s in %.1fs%s: %d added, %d changed, %d removed, %d assets"
-		% [root, seconds, " (stopped)" if cancelled else "", added, changed, removed, total])
-	if added + changed + removed > 0:
+	print("AssetManager: scanned %s in %.1fs%s: %d added, %d changed, %d removed, %d retagged, %d assets"
+		% [root, seconds, " (stopped)" if cancelled else "", added, changed, removed, retagged, total])
+	if added + changed + removed + retagged > 0:
 		_refresh_all_after_index_change()
 
 ## Runs `work` on the WorkerThreadPool and yields frames until it is done.
@@ -296,7 +296,13 @@ func _on_add_confirmed(type_id: String, source_path: String, format: String, var
 	# Extraction writes every file of the pack to the workspace, which on a NAS
 	# takes long enough to freeze the editor if it ran here.
 	var result: Dictionary = {}
+	# <type>/<vendor>/<pack>: the vendor folder gets its marker, so the new
+	# pack is tagged with its type like the rest of that vendor.
+	var vendor_dir := dest_root.get_base_dir()
+	var has_vendor := vendor_dir.get_base_dir() == current_workspace_path.path_join(type_id)
 	await _run_off_main_thread(func() -> void:
+		if has_vendor:
+			VendorMarker.ensure(vendor_dir)
 		if source_path.get_extension().to_lower() == "zip":
 			result.merge(AssetAdd.extract(source_path, type_id, format, variant, dest_root))
 		else:

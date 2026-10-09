@@ -56,14 +56,17 @@ public sealed class Catalog
 			return new CatalogSnapshot(_byPath.Values.ToArray(), _tags.Names.ToArray());
 	}
 
-	/// Folds one walk into the catalog. Unchanged files are left alone, so a
-	/// rescan of an unchanged library costs nothing but the walk. Records under
-	/// `scanRoot` that the walk did not see are removed; nothing outside it is
-	/// touched. `resourceTypeOf` reads a .tres header and is only called for
-	/// new or changed files of types that need it.
-	public ScanSummary ApplyScan(string scanRoot, IReadOnlyList<FoundFile> found, long now, Func<string, string> resourceTypeOf)
+	/// Folds one walk into the catalog. Unchanged files keep their record, so a
+	/// rescan of an unchanged library costs the walk and a tag comparison.
+	/// Records under `scanRoot` that the walk did not see are removed; nothing
+	/// outside it is touched. `resourceTypeOf` reads a .tres header and is only
+	/// called for new or changed files of types that need it.
+	public ScanSummary ApplyScan(string scanRoot, ScanResult walk, long now, Func<string, string> resourceTypeOf)
 	{
-		var plan = ScanPlan.Build(found, _byPath, Types, resourceTypeOf);
+		string[] tagNames;
+		lock (_gate)
+			tagNames = _tags.Names.ToArray();
+		var plan = ScanPlan.Build(walk, _byPath, tagNames, Types, resourceTypeOf);
 
 		lock (_gate)
 		{
@@ -72,6 +75,9 @@ public sealed class Catalog
 				change.Record.Size = change.File.Size;
 				change.Record.MTime = change.File.MTime;
 			}
+
+			foreach (var retag in plan.Retags)
+				retag.Record.AutoTags = retag.AutoTags.Select(_tags.Intern).ToArray();
 
 			foreach (var add in plan.Additions)
 			{
@@ -92,7 +98,7 @@ public sealed class Catalog
 				_byPath.Remove(path);
 
 			Invalidate();
-			return new ScanSummary(plan.Additions.Count, plan.Changes.Count, removed.Count, _byPath.Count);
+			return new ScanSummary(plan.Additions.Count, plan.Changes.Count, removed.Count, _byPath.Count, plan.Retags.Count);
 		}
 	}
 

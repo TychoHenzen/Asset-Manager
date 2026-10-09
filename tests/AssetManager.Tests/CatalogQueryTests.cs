@@ -77,7 +77,7 @@ public class CatalogQueryTests
 		Assert.Equal("a_tree.png", Names(catalog.Query(new CatalogQuery()))[0]);
 
 		catalog.SetUserTags("models/kenney/sword.glb", ["hero"]);
-		catalog.ApplyScan("images/craft/forest", [
+		catalog.ApplyFiles("images/craft/forest", [
 			Fixtures.File("images/craft/forest/a_tree.png", 100, 1),
 			Fixtures.File("images/craft/forest/b_tree.png", 300, 1),
 			Fixtures.File("images/craft/forest/_first.png"),
