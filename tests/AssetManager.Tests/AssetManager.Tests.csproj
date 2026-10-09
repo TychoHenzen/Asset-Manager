@@ -11,6 +11,7 @@
   <ItemGroup>
     <!-- The catalog core has no Godot dependency, so it compiles straight into the tests. -->
     <Compile Include="../../addons/asset_manager/core/catalog/*.cs" Link="Catalog/%(Filename)%(Extension)" />
+    <Compile Include="../../addons/asset_manager/core/models/*.cs" Link="Models/%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>

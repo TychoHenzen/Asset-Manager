@@ -18,7 +18,9 @@ var _last_tick_usec: int = 0
 var _max_gap_ms: float = 0.0
 var _measuring: bool = false
 var _arrived: Dictionary = {}
+var _failed: Dictionary = {}
 var _failures: Array[String] = []
+var _paths: ThumbnailService
 
 func _initialize() -> void:
 	_run.call_deferred()
@@ -40,10 +42,15 @@ func _run() -> void:
 	catalog.Open()
 	await catalog.Opened
 
+	# Only asked for paths, nothing connected, so no shutdown concerns.
+	_paths = ThumbnailService.new()
+	_paths.Setup(workspace)
+
 	var loader := ThumbnailLoader.new()
 	root.add_child(loader)
 	loader.setup(workspace, catalog)
 	loader.thumbnail_ready.connect(_on_thumbnail_ready)
+	loader.thumbnail_failed.connect(_on_thumbnail_failed)
 
 	var request_id := 100
 	for spec: String in types:
@@ -54,12 +61,13 @@ func _run() -> void:
 		var page: Array = await catalog.QueryReady
 		var paths: PackedStringArray = page[1]
 		_arrived.clear()
+		_failed.clear()
 		_max_gap_ms = 0.0
 		_last_tick_usec = 0
 		_measuring = true
 		var started := Time.get_ticks_msec()
 		loader.request(request_id, paths, page[2], page[3], page[4])
-		while _arrived.size() < paths.size() and Time.get_ticks_msec() - started < WAIT_MS:
+		while _arrived.size() + _failed.size() < paths.size() and Time.get_ticks_msec() - started < WAIT_MS:
 			await process_frame
 		_measuring = false
 
@@ -67,13 +75,11 @@ func _run() -> void:
 		await create_timer(2.0).timeout
 		var cached := 0
 		for i in paths.size():
-			var key := (paths[i] + "|" + str(page[4][i]) + "|" + str(page[3][i])).md5_text()
-			var thumb := workspace.path_join(".assetmanager/thumbnails").path_join(type_id).path_join(key.substr(0, 2)).path_join(key + ".webp")
-			if FileAccess.file_exists(thumb):
+			if FileAccess.file_exists(_paths.ThumbPath(paths[i], page[2][i], page[3][i], page[4][i])):
 				cached += 1
 
-		print("%s: %d of %d textures in %.1f s, %d cached on disk, max frame gap %.1f ms"
-			% [type_id, _arrived.size(), paths.size(), (Time.get_ticks_msec() - started) / 1000.0, cached, _max_gap_ms])
+		print("%s: %d of %d textures (%d failed) in %.1f s, %d cached on disk, max frame gap %.1f ms"
+			% [type_id, _arrived.size(), paths.size(), _failed.size(), (Time.get_ticks_msec() - started) / 1000.0, cached, _max_gap_ms])
 		if paths.is_empty():
 			continue
 		if _arrived.is_empty():
@@ -93,3 +99,6 @@ func _run() -> void:
 
 func _on_thumbnail_ready(_request_id: int, path: String, _texture: Texture2D) -> void:
 	_arrived[path] = true
+
+func _on_thumbnail_failed(_request_id: int, path: String) -> void:
+	_failed[path] = true

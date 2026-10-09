@@ -8,6 +8,8 @@ extends Node
 ## texture per path, tagged with the request it belongs to.
 
 signal thumbnail_ready(request_id: int, path: String, texture: Texture2D)
+## Nothing could be rendered for this asset.
+signal thumbnail_failed(request_id: int, path: String)
 
 var _service: ThumbnailService
 var _renderer: LazyThumbnailRenderer
@@ -24,6 +26,7 @@ func setup(workspace_path: String, catalog: AssetCatalog) -> void:
 	_renderer = LazyThumbnailRenderer.new()
 	_renderer.setup(self, _service, catalog)
 	_renderer.rendered.connect(_on_rendered)
+	_renderer.failed.connect(thumbnail_failed.emit)
 
 ## The arrays are one QueryReady page.
 func request(request_id: int, paths: PackedStringArray, types: PackedStringArray, sizes: PackedInt64Array, mtimes: PackedInt64Array) -> void:

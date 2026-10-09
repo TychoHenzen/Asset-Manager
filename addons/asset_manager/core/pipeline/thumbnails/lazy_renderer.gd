@@ -10,6 +10,8 @@ extends RefCounted
 ## drawing. Jobs from a page the user has already left are dropped unrendered.
 
 signal rendered(request_id: int, path: String, image: Image)
+## No thumbnail could be made; the grid keeps the type icon.
+signal failed(request_id: int, path: String)
 
 const RENDERERS: Dictionary = {
 	"models": preload("res://addons/asset_manager/core/types/models/thumb.gd"),
@@ -137,6 +139,7 @@ func _render_chunk(chunk: Array[Dictionary], viewport: ThumbnailViewport) -> voi
 		job.erase("prepared")
 		if image == null:
 			push_warning("AssetManager: no thumbnail generated for ", job["path"])
+			failed.emit(int(job["request_id"]), job["path"])
 			continue
 		_service.Store(job["path"], job["type"], job["size"], job["mtime"], image, ThumbnailSizes.size_for(viewport.animate))
 		rendered.emit(int(job["request_id"]), job["path"], image)

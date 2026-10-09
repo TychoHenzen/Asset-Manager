@@ -88,6 +88,10 @@ public partial class ThumbnailService : RefCounted, ISerializationListener
 		}, "saving a thumbnail");
 	}
 
+	/// Where the thumbnail for this asset lives, whether or not it exists yet.
+	public string ThumbPath(string path, string type, long size, long mtime) =>
+		ThumbnailPaths.ForAsset(_workspace, type, path, mtime, size);
+
 	public void Shutdown() => _work.Shutdown(TimeSpan.FromSeconds(10));
 
 	private void Drain(CancellationToken token)

@@ -69,28 +69,9 @@ func show_asset(path: String, _type_entry: Dictionary = {}) -> void:
 	_grid.set_visible(true)
 	_orbit.snap_to_look_at()
 
-	var ext := path.get_extension().to_lower()
-	# FBXDocument rejects a plain GLTFState (fbx_document.cpp:2261), it needs
-	# its own subclass.
-	var state: GLTFState = FBXState.new() if ext == "fbx" else GLTFState.new()
-	var err: int = FAILED
-
-	state.handle_binary_image_mode = GLTFState.HANDLE_BINARY_IMAGE_MODE_EMBED_AS_UNCOMPRESSED
-
-	if ext == "fbx":
-		var fbx := FBXDocument.new()
-		err = fbx.append_from_file(path, state)
-		if err == OK:
-			_loaded_node = fbx.generate_scene(state)
-	else:
-		var gltf := GLTFDocument.new()
-		err = gltf.append_from_file(path, state)
-		if err == OK:
-			_loaded_node = gltf.generate_scene(state)
-
-	if err == OK and _loaded_node:
+	_loaded_node = ModelLoader.load_model(path)
+	if _loaded_node:
 		_pivot.add_child(_loaded_node)
-		_loaded_node = _convert_importer_meshes(_loaded_node)
 		_center_and_scale(_loaded_node)
 
 func hide_asset() -> void:
@@ -172,46 +153,3 @@ func _find_meshes_recursive(node: Node, result: Array[MeshInstance3D]) -> void:
 	for child in node.get_children():
 		_find_meshes_recursive(child, result)
 
-func _convert_importer_meshes(node: Node) -> Node:
-	if not is_instance_valid(node):
-		return node
-
-	var new_node: Node = node
-
-	if node.get_class() == "ImporterMeshInstance3D":
-		var mi := MeshInstance3D.new()
-		mi.name = node.name
-		if node is Node3D:
-			mi.transform = node.transform
-
-		var importer_mesh: Variant = node.get("mesh")
-		if importer_mesh != null and importer_mesh.has_method("get_mesh"):
-			mi.mesh = importer_mesh.get_mesh()
-
-		var skin: Variant = node.get("skin")
-		if skin != null:
-			mi.skin = skin
-
-		var skeleton_path: Variant = node.get("skeleton_path")
-		if skeleton_path != null:
-			mi.skeleton = skeleton_path
-
-		var children := node.get_children()
-		for child in children:
-			node.remove_child(child)
-			mi.add_child(child)
-
-		var parent := node.get_parent()
-		if parent != null:
-			parent.add_child(mi)
-			node.queue_free()
-		else:
-			node.free()
-
-		new_node = mi
-
-	var current_children := new_node.get_children()
-	for child in current_children:
-		_convert_importer_meshes(child)
-
-	return new_node
