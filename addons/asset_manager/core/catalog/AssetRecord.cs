@@ -1,0 +1,50 @@
+using System;
+
+namespace AssetManager.Core;
+
+/// One indexed file. Size and mtime come from the directory listing at scan
+/// time, so nothing downstream ever has to stat the file again: they are
+/// half of the thumbnail key and the whole of the size sort.
+public sealed class AssetRecord
+{
+	public AssetRecord(string relPath, int type)
+	{
+		RelPath = relPath;
+		Type = type;
+		var slash = relPath.LastIndexOf('/');
+		FileName = slash < 0 ? relPath : relPath[(slash + 1)..];
+		FileNameLower = FileName.ToLowerInvariant();
+		ExtensionLower = TextRules.ExtensionLower(FileName);
+	}
+
+	/// Workspace-relative, "/"-separated, first segment is the type bucket.
+	public string RelPath { get; }
+	public int Type { get; }
+	public string FileName { get; }
+	public string FileNameLower { get; }
+	public string ExtensionLower { get; }
+
+	public long Size { get; set; }
+	public long MTime { get; set; }
+
+	/// Unix seconds, set once when the file is first indexed.
+	public long DateAdded { get; set; }
+
+	/// Interned tag ids derived from folder names, stored in catalog.bin.
+	public int[] AutoTags { get; set; } = [];
+
+	/// Interned tag ids the user set by hand, stored in tags.bin. Null when the
+	/// user never edited this asset's tags.
+	public int[]? UserTags { get; set; }
+
+	public int[] Tags => UserTags ?? AutoTags;
+
+	/// Filter categories a thumbnail renderer detected ("3d", "spatial"...).
+	public string[] Subtypes { get; set; } = [];
+
+	public bool IsUnder(string relPrefix) =>
+		relPrefix.Length == 0
+		|| (RelPath.Length > relPrefix.Length
+			&& RelPath[relPrefix.Length] == '/'
+			&& RelPath.StartsWith(relPrefix, StringComparison.Ordinal));
+}

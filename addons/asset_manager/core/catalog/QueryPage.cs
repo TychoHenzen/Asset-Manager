@@ -1,0 +1,7 @@
+using System.Collections.Generic;
+
+namespace AssetManager.Core;
+
+/// One page of matches plus the size of the whole match set, so the grid can
+/// draw its pager without holding every match.
+public sealed record QueryPage(IReadOnlyList<AssetRecord> Items, int Total, int Page, int TotalPages);
