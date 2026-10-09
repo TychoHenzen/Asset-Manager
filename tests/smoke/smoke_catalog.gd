@@ -56,7 +56,7 @@ func _check_workspace(workspace: String) -> void:
 	_start_measuring()
 	catalog.Open()
 	var opened: Array = await catalog.Opened
-	print("opened: %d assets, from disk: %s, max frame gap %.1f ms" % [opened[0], opened[1], _max_gap_ms])
+	print("opened: %d assets, needs scan: %s, max frame gap %.1f ms" % [opened[0], opened[1], _max_gap_ms])
 
 	_start_measuring()
 	var started := Time.get_ticks_msec()
@@ -118,7 +118,7 @@ func _check_incremental_on_temp_workspace() -> void:
 	catalog.Setup(root, _types_json)
 	catalog.Open()
 	var opened: Array = await catalog.Opened
-	_expect(opened[1] == false, "fresh temp workspace claimed a catalog on disk")
+	_expect(opened[1] == true, "fresh temp workspace did not ask for a scan")
 
 	catalog.Scan(root)
 	var first: Array = await catalog.ScanFinished
@@ -134,7 +134,7 @@ func _check_incremental_on_temp_workspace() -> void:
 	reopened.Setup(root, _types_json)
 	reopened.Open()
 	var again: Array = await reopened.Opened
-	_expect(again[0] == 3 and again[1] == true, "reopened catalog has %d assets" % again[0])
+	_expect(again[0] == 3 and again[1] == false, "reopened catalog has %d assets" % again[0])
 
 	catalog.Shutdown()
 	reopened.Shutdown()

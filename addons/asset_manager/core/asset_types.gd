@@ -3,7 +3,8 @@ class_name AssetTypes
 extends RefCounted
 
 ## Asset types: id, label, extensions, default_icon, default_export_path,
-## optional runners (custom import handler) and subtypes (filter category).
+## optional resource_type (header check for .tres) and subtypes (filter
+## category). The C# catalog reads this table as JSON, see AssetCatalog.Setup.
 
 const ALL: Array[Dictionary] = [
 	{
@@ -55,7 +56,6 @@ const ALL: Array[Dictionary] = [
 		"default_icon": "StandardMaterial3D",
 		"default_export_path": "res://assets/materials",
 		"resource_type": ["StandardMaterial3D", "ORMMaterial3D"],
-		"runners": ["materials"]
 	},
 	{
 		"id": "effects",

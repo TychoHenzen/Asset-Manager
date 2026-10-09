@@ -22,6 +22,27 @@
 
 Manage all your Godot assets in a single place, get previews and send files directly into project(s). Supports Godot 4.x on Mac/Linux & Windows.
 
+## About this fork
+
+This fork makes the addon usable on very large libraries, including ones on a
+network share. It was built against a 318,000-file library on a NAS, where the
+original froze the editor for hours on Rebuild.
+
+- Scanning, the index, search and sidebar counts run in C# on background
+  threads. The editor stays responsive during a scan.
+- **Scan** replaces Rebuild. It only touches new, changed and removed files,
+  and it can be stopped. A first scan of 318k files over SMB took under 3
+  minutes, and a rescan with nothing changed reported no changes.
+- **Rescan Folder** (right-click a folder in the sidebar) scans one folder.
+  Add and Send to Asset Manager scan only the pack they just wrote.
+- Thumbnails are made on demand for the page you are looking at, never for the
+  whole library up front. They are cached in the workspace as before, so
+  thumbnails made by the original addon are reused.
+- Tag edits write a small `tags.bin` instead of rewriting the whole index.
+  An existing `index.db` is migrated on first open.
+
+The trade-off: this fork needs the .NET (C#) build of Godot.
+
 ## Key Features
 
 - Shared asset library outside any project
@@ -30,15 +51,19 @@ Manage all your Godot assets in a single place, get previews and send files dire
 - Search & filtering across your whole assets directory
 - Multi-workspace support & shared assets for collaboration
 - Tagging assets with custom names
-- Thumbnail generation for all asset types
+- On-demand thumbnails for all asset types
 - Export destination per project/game
 - Grid & list toggable views
 - Right-click to send project assets to the library
 
 ## Requirements:
 
-- Godot version: 4.4 minimum, 4.7+ recommended (built and tested on 4.7)
+- Godot version: the .NET build, 4.7+ (this fork is built and tested on 4.7.1 .NET)
+- .NET SDK 8 or newer, to build the C# part
 - Platform: Windows, macOS, Linux (no native code, should work anywhere)
+
+A project using the addon must be a C# project: in Godot, use
+*Project > Tools > C# > Create C# solution* once, then build.
 
 ## Installation
 
@@ -48,7 +73,26 @@ You can clone this repo and add `/addons/**` to your project or use the Godot As
 
 ## Development
 
-All source code is available and no extra libraries are required to start.
+The repo root is a Godot .NET project hosting the addon.
+
+- `addons/asset_manager/core/catalog/` is the C# catalog. Its top level has no
+  Godot dependency; `godot/` holds the thin bridge the GDScript UI calls.
+- `dotnet test tests/AssetManager.Tests` runs the catalog's unit tests.
+- `tests/smoke/smoke_catalog.gd` checks a real workspace headlessly. It
+  measures main-thread frame gaps during a full scan, checks that a rescan
+  with nothing changed is a no-op, and times a query and one page of
+  thumbnails:
+
+  ```
+  godot --headless --path . -s res://tests/smoke/smoke_catalog.gd -- <workspace>
+  ```
+
+Two rules for the C#/GDScript boundary, both needed to avoid a crash when the
+4.7.1 editor exits:
+
+- Pass only strings, numbers and packed arrays across it. Nested data goes as
+  JSON.
+- Connect bound methods to the C# signals, never lambdas.
 
 ## Credits
 

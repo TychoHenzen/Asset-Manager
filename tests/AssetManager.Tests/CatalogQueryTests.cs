@@ -70,6 +70,24 @@ public class CatalogQueryTests
 	}
 
 	[Fact]
+	public void KnownTags_AndSortOrders_FollowEdits()
+	{
+		var catalog = Library();
+		Assert.DoesNotContain("hero", catalog.KnownTags());
+		Assert.Equal("a_tree.png", Names(catalog.Query(new CatalogQuery()))[0]);
+
+		catalog.SetUserTags("models/kenney/sword.glb", ["hero"]);
+		catalog.ApplyScan("images/craft/forest", [
+			Fixtures.File("images/craft/forest/a_tree.png", 100, 1),
+			Fixtures.File("images/craft/forest/b_tree.png", 300, 1),
+			Fixtures.File("images/craft/forest/_first.png"),
+		], 9, _ => "");
+
+		Assert.Contains("hero", catalog.KnownTags());
+		Assert.Equal("_first.png", Names(catalog.Query(new CatalogQuery()))[0]);
+	}
+
+	[Fact]
 	public void Query_Subtype_FiltersOnRendererDetectedCategory()
 	{
 		var catalog = Library();
