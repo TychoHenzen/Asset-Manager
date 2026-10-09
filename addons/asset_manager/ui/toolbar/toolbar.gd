@@ -5,14 +5,15 @@ extends MarginContainer
 ## Emits intent; it never reads the database or touches the grid. main_screen
 ## decides what each one means.
 signal sidebar_toggled(collapsed: bool)
-signal rebuild_pressed
+## Pressed while a scan runs, it means stop.
+signal scan_pressed
 signal add_pressed(type_id: String)
 signal search_changed(text: String)
 signal settings_pressed
 
 @onready var _sidebar_btn: Button = $HBox/SidebarButton
 @onready var _add_btn: MenuButton = $HBox/AddButton
-@onready var _rebuild_btn: Button = $HBox/RebuildButton
+@onready var _scan_btn: Button = $HBox/ScanButton
 @onready var _search_input: LineEdit = $HBox/SearchInput
 @onready var _settings_btn: Button = $HBox/SettingsButton
 
@@ -26,7 +27,7 @@ func _ready() -> void:
 		return
 
 	_sidebar_btn.pressed.connect(_on_sidebar_button_pressed)
-	_rebuild_btn.pressed.connect(func() -> void: rebuild_pressed.emit())
+	_scan_btn.pressed.connect(func() -> void: scan_pressed.emit())
 	_search_input.text_changed.connect(func(text: String) -> void: search_changed.emit(text))
 	_settings_btn.pressed.connect(func() -> void: settings_pressed.emit())
 
@@ -58,7 +59,7 @@ func _apply_spacing() -> void:
 ## editor and matches the docks either side of it.
 func _apply_icons() -> void:
 	_set_icon(_add_btn, "Add")
-	_set_icon(_rebuild_btn, "Reload")
+	_set_icon(_scan_btn, "Reload")
 	_set_icon(_settings_btn, "Tools")
 
 	# same treatment Godot gives its own filter fields (filesystem_dock.cpp:663)
@@ -84,12 +85,13 @@ func _update_sidebar_icon(collapsed: bool) -> void:
 		_sidebar_btn.text = ""
 	_sidebar_btn.tooltip_text = "Show sidebar" if collapsed else "Hide sidebar"
 
-## Rebuild runs for many seconds, so the button reports progress rather than
-## looking unresponsive.
-func set_rebuilding(rebuilding: bool) -> void:
-	_rebuild_btn.disabled = rebuilding
-	_add_btn.disabled = rebuilding
-	_rebuild_btn.tooltip_text = "Rebuilding…" if rebuilding else "Rebuild Index"
+## A full scan of a large library runs for minutes in the background, so the
+## same button turns into the way to stop it. Add waits, its own scan of the
+## new pack would be refused while one runs.
+func set_scanning(scanning: bool) -> void:
+	_add_btn.disabled = scanning
+	_set_icon(_scan_btn, "Stop" if scanning else "Reload")
+	_scan_btn.tooltip_text = "Stop scanning" if scanning else "Scan for new, changed and removed files"
 
 func search_text() -> String:
 	return _search_input.text

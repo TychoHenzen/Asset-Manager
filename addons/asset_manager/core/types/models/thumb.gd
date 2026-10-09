@@ -10,9 +10,6 @@ extends RefCounted
 ## pushes onto the command queue when called off the render thread.
 ## Worth ~4 seconds on a few hundred models.
 
-static func work_kind() -> int:
-	return ThumbnailStage.WORK_VIEWPORT
-
 static func prepare(path: String) -> Variant:
 	return _load(path)
 
@@ -21,7 +18,7 @@ static func prepare(path: String) -> Variant:
 static func reuses_main_viewport() -> bool:
 	return true
 
-## Already parsed by prepare() on a worker, hands it over so the stage can
+## Already parsed by prepare() on a worker, hands it over so LazyThumbnailRenderer can
 ## render a whole chunk in one frame (ThumbnailViewport.capture_batch).
 static func build_subject(prepared: Variant, path: String) -> Node3D:
 	if prepared is Node3D:

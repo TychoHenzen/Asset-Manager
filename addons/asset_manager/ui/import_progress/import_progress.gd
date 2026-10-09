@@ -2,20 +2,24 @@
 class_name ImportProgressDialog
 extends AcceptDialog
 
-## Modal progress for Rebuild Index. Blocking and not cancellable by design,
-## a half-finished index is worse than a slow one.
-## Two tiers, mirroring how the work actually runs: the top row is which stage
-## we're in, the bottom is progress within it. Import dispatches every type in
-## parallel, so the detail line names the most recent thing to finish rather
-## than pretending there's one current file.
+## Progress for a scan, which runs in the background. Not modal: the editor
+## stays usable while a large library is walked, and Hide only hides this, the
+## scan carries on. Stop cancels it; files already indexed stay indexed and the
+## next scan picks up the rest.
+## Two tiers: the top row is which stage we're in, the bottom is progress
+## within it. A walk cannot know its total in advance, so while walking both
+## bars run indeterminate and the detail line counts files.
+
+signal stop_requested
 
 ## Ordered, so the top bar can show real overall progress rather than just
-## naming a stage. Thumbnails is by far the longest, hence the weighting.
+## naming a stage.
 const STAGES: Array[Dictionary] = [
 	{"id": "scan", "label": "Scanning files", "weight": 1.0},
-	{"id": "database", "label": "Writing index", "weight": 0.2},
-	{"id": "thumbnails", "label": "Generating thumbnails", "weight": 8.0},
+	{"id": "database", "label": "Updating index", "weight": 0.2},
 ]
+
+const STOP_ACTION: StringName = &"stop"
 
 @onready var _stage_label: Label = $Margin/VBox/StageRow/StageLabel
 @onready var _elapsed_label: Label = $Margin/VBox/StageRow/ElapsedLabel
@@ -33,10 +37,13 @@ func _ready() -> void:
 	if EditorGuard.is_scene_tab(self):
 		return
 
-	# Nothing to confirm, the run can't be cancelled, so an OK button would
-	# either lie or dismiss a dialog whose work is still going.
-	get_ok_button().visible = false
-	exclusive = true
+	# OK only hides the dialog. Stop is a custom action rather than a cancel
+	# button, because closing the window also counts as cancel and closing it
+	# should not throw away a long walk.
+	exclusive = false
+	get_ok_button().text = "Hide"
+	add_button("Stop", true, STOP_ACTION)
+	custom_action.connect(_on_custom_action)
 
 	_ticker = Timer.new()
 	_ticker.wait_time = 0.5
@@ -60,9 +67,19 @@ func finish() -> void:
 	_ticker.stop()
 	hide()
 
-## Fed straight from AssetImporter.progress, unknown keys are ignored so the
-## reporting side can add fields without breaking this.
+func _on_custom_action(action: StringName) -> void:
+	if action == STOP_ACTION:
+		stop_requested.emit()
+		hide()
+
+## Fed from AssetCatalog.ScanProgressed, unknown keys are ignored so the
+## reporting side can add fields without breaking this. A total of 0 means
+## the stage cannot know how far along it is.
 func on_progress(info: Dictionary) -> void:
+	var indeterminate := int(info.get("total", 0)) == 0
+	_detail_bar.indeterminate = indeterminate
+	_stage_bar.indeterminate = indeterminate
+
 	var stage_id: String = info.get("stage", "")
 	var type_id: String = info.get("type", "")
 

@@ -12,9 +12,9 @@ signal open_external_requested
 signal send_to_project_requested
 signal add_requested(type_id: String)
 
-var database: AssetDatabase
+var catalog: AssetCatalog
 var settings: SettingsManager
-var thumbnails: ThumbnailCache
+var thumbnails: ThumbnailLoader
 
 var _animator: ThumbnailAnimator = ThumbnailAnimator.new()
 var _blank_texture: ImageTexture
@@ -24,6 +24,16 @@ var _subtype: String = ""
 var _sort_mode: int = GridSubbar.Sort.NAME
 var _page: int = 0
 var _total_pages: int = 1
+
+## Queries answer asynchronously and only the newest one is drawn. Thumbnails
+## carry the same id, so a late one for a page already left is ignored.
+var _request_id: int = 0
+var _item_by_path: Dictionary = {}
+
+## Typing in the search box changes the filter per keystroke, and each query
+## walks the whole catalog, so a burst of changes becomes one query.
+const FILTER_SETTLE_SECONDS: float = 0.12
+var _settle_timer: Timer
 
 @onready var _subbar: GridSubbar = $VBox/Subbar
 @onready var _list: ItemList = $VBox/GridStack/AssetGrid
@@ -58,8 +68,8 @@ func _ready() -> void:
 	_subbar.view_mode_changed.connect(_on_view_mode_changed)
 	_subbar.subtype_changed.connect(_on_subtype_changed)
 	_open_folder_button.pressed.connect(func() -> void:
-		if database != null and not database.workspace_path.is_empty():
-			OS.shell_open(database.workspace_path)
+		if catalog != null and not catalog.WorkspacePath.is_empty():
+			OS.shell_open(catalog.WorkspacePath)
 	)
 
 	_add_asset_button.icon = IconHelper.get_icon("Add")
@@ -74,6 +84,12 @@ func _ready() -> void:
 
 	var blank := Image.create_empty(1, 1, false, Image.FORMAT_RGBA8)
 	_blank_texture = ImageTexture.create_from_image(blank)
+
+	_settle_timer = Timer.new()
+	_settle_timer.one_shot = true
+	_settle_timer.wait_time = FILTER_SETTLE_SECONDS
+	_settle_timer.timeout.connect(refresh)
+	add_child(_settle_timer)
 
 	_apply_panel_style()
 
@@ -106,10 +122,15 @@ func _apply_panel_style() -> void:
 	var spacing: int = EditorInterface.get_editor_settings().get_setting("interface/theme/base_spacing")
 	$VBox.add_theme_constant_override("separation", int(spacing * EditorInterface.get_editor_scale()))
 
-func setup(p_database: AssetDatabase, p_settings: SettingsManager, p_thumbnails: ThumbnailCache) -> void:
-	database = p_database
+func setup(p_catalog: AssetCatalog, p_settings: SettingsManager, p_thumbnails: ThumbnailLoader) -> void:
+	catalog = p_catalog
 	settings = p_settings
 	thumbnails = p_thumbnails
+	# Bound methods only: a lambda connected to a C# signal crashes Godot on
+	# exit (see AssetCatalog).
+	catalog.QueryReady.connect(_on_query_ready)
+	if not thumbnails.thumbnail_ready.is_connected(_on_thumbnail_ready):
+		thumbnails.thumbnail_ready.connect(_on_thumbnail_ready)
 
 	_animator.setup(_list, self)
 	_subbar.set_tile_size(settings.get_grid_icon_size())
@@ -126,37 +147,58 @@ func set_filter(prefix: String, tags: Array, extensions: Array, search: String, 
 	# drops it.
 	_subtype = ""
 	_subbar.set_subtypes(type_id)
-	refresh()
+	_settle_timer.start()
 
+## Asks the catalog for the current page; _on_query_ready draws it.
 func refresh() -> void:
-	if database == null:
+	if catalog == null:
+		return
+	_settle_timer.stop()
+	_request_id += 1
+	catalog.Query(_request_id, JSON.stringify({
+		"prefix": _filter.get("prefix", ""),
+		"tags": _filter.get("tags", []),
+		"extensions": _filter.get("extensions", []),
+		"search": _filter.get("search", ""),
+		"subtype": _subtype,
+		"sort": _sort_mode,
+		"page": _page,
+		"per_page": settings.get_items_per_page(),
+	}))
+
+func _on_query_ready(request_id: int, paths: PackedStringArray, types: PackedStringArray,
+		sizes: PackedInt64Array, mtimes: PackedInt64Array, total: int, page: int, total_pages: int) -> void:
+	if request_id != _request_id:
 		return
 
 	_list.clear()
 	_animator.clear()
+	_item_by_path.clear()
 
-	var matched := _matching_assets()
-	_sort(matched)
-
-	var per_page: int = settings.get_items_per_page()
-	_total_pages = maxi(1, ceili(matched.size() / float(per_page)))
-	_page = clampi(_page, 0, _total_pages - 1)
+	_page = page
+	_total_pages = total_pages
 	_subbar.set_page(_page, _total_pages)
 
-	var start := _page * per_page
-	var end := mini(start + per_page, matched.size())
-
-	for i in range(start, end):
-		var entry: Dictionary = matched[i]
-		var path: String = entry["path"]
-		var icon := _icon_for(path, entry["type"])
-		var idx := _list.add_item(path.get_file(), icon)
-		_list.set_item_icon(idx, _animator.register(idx, icon))
+	# Type icons first, so the page is usable at once; thumbnails replace them
+	# as they arrive.
+	for i in paths.size():
+		var path := paths[i]
+		var idx := _list.add_item(path.get_file(), _type_icon(types[i]))
 		_list.set_item_metadata(idx, path)
 		_list.set_item_tooltip(idx, path)
+		_item_by_path[path] = idx
 
+	_update_empty_state(total)
+	thumbnails.request(request_id, paths, types, sizes, mtimes)
+
+func _on_thumbnail_ready(request_id: int, path: String, texture: Texture2D) -> void:
+	if request_id != _request_id:
+		return
+	var idx: int = _item_by_path.get(path, -1)
+	if idx < 0:
+		return
+	_list.set_item_icon(idx, _animator.register(idx, texture))
 	_animator.start()
-	_update_empty_state(matched.size())
 
 ## Two different nothings: a workspace with no assets at all needs telling where
 ## assets come from, a filter that matched nothing just needs saying so.
@@ -165,9 +207,9 @@ func _update_empty_state(matched_count: int) -> void:
 		_empty_state.visible = false
 		return
 
-	if database.assets.is_empty():
+	if catalog.Count == 0:
 		_empty_title.text = "This workspace is empty"
-		_empty_body.text = "Add an asset pack, or copy files into\n%s\nthen press Rebuild." % database.workspace_path
+		_empty_body.text = "Add an asset pack, or copy files into\n%s\nthen press Scan." % catalog.WorkspacePath
 		_empty_buttons.visible = true
 	else:
 		_empty_title.text = "Nothing to show"
@@ -176,118 +218,9 @@ func _update_empty_state(matched_count: int) -> void:
 
 	_empty_state.visible = true
 
-func _matching_assets() -> Array[Dictionary]:
-	var result: Array[Dictionary] = []
-
-	var search: String = _filter.get("search", "")
-	var exact := false
-	if search.length() >= 2 and search.begins_with("\"") and search.ends_with("\""):
-		exact = true
-		search = search.substr(1, search.length() - 2)
-
-	var prefix: String = _filter.get("prefix", "")
-	var tags: Array = _filter.get("tags", [])
-	var extensions: Array = _filter.get("extensions", [])
-
-	for path: String in database.assets:
-		if not prefix.is_empty() and not path.begins_with(prefix):
-			continue
-
-		var stored: Dictionary = database.assets[path]
-
-		if not tags.is_empty():
-			var asset_tags: Array = stored.get("tags", [])
-			var has_all := true
-			for t in tags:
-				if not asset_tags.has(t):
-					has_all = false
-					break
-			if not has_all:
-				continue
-
-		if not extensions.is_empty() and not extensions.has(path.get_extension().to_lower()):
-			continue
-
-		# An array so a type could gain a second axis later, "spatial" then
-		# still finds a shader that is also something else.
-		if not _subtype.is_empty() and not stored.get("subtype", []).has(_subtype):
-			continue
-
-		var entry: Dictionary = {"path": path, "type": stored["type"], "tags": stored.get("tags", [])}
-
-		if not search.is_empty() and not _matches_search(entry, search, exact):
-			continue
-
-		result.append(entry)
-
-	return result
-
-func _matches_search(entry: Dictionary, query: String, exact: bool) -> bool:
-	var filename: String = String(entry["path"]).get_file()
-	var tags: Array = entry.get("tags", [])
-
-	if exact:
-		if filename.findn(query) != -1:
-			return true
-		for tag in tags:
-			if String(tag).findn(query) != -1:
-				return true
-		return false
-
-	if query.is_subsequence_ofn(filename):
-		return true
-	for tag in tags:
-		if query.is_subsequence_ofn(String(tag)):
-			return true
-	return false
-
-## A search puts exact substring matches first, because a fuzzy match on a long
-## name otherwise outranks the file the user actually typed.
-func _sort(assets: Array[Dictionary]) -> void:
-	var search: String = _filter.get("search", "")
-
-	if not search.is_empty():
-		assets.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-			var file_a := String(a["path"]).get_file()
-			var file_b := String(b["path"]).get_file()
-			var exact_a := file_a.findn(search) != -1
-			var exact_b := file_b.findn(search) != -1
-			if exact_a != exact_b:
-				return exact_a
-			return file_a.nocasecmp_to(file_b) < 0
-		)
-		return
-
-	match _sort_mode:
-		GridSubbar.Sort.RECENT:
-			assets.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-				return database.get_date_added(a["path"]) > database.get_date_added(b["path"])
-			)
-		GridSubbar.Sort.SIZE:
-			assets.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-				return _file_size(a["path"]) > _file_size(b["path"])
-			)
-		_:
-			assets.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-				return String(a["path"]).get_file().nocasecmp_to(String(b["path"]).get_file()) < 0
-			)
-
-func _file_size(path: String) -> int:
-	var file := FileAccess.open(path, FileAccess.READ)
-	if file == null:
-		return 0
-	var size := file.get_length()
-	file.close()
-	return size
-
-## A real thumbnail if one was generated, the type icon otherwise, a missing
-## thumbnail is normal, not a failure.
-func _icon_for(path: String, type_id: String) -> Texture2D:
-	if thumbnails:
-		var thumb := thumbnails.load_texture(path, type_id)
-		if thumb:
-			return thumb
-
+## The type's editor icon, shown until the thumbnail arrives, and for good
+## when there is none.
+func _type_icon(type_id: String) -> Texture2D:
 	if not Engine.is_editor_hint():
 		return _blank_texture
 

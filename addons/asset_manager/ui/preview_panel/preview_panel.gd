@@ -29,8 +29,6 @@ const OTHER_SCENE := preload("res://addons/asset_manager/ui/preview_panel/types/
 const BASE_MIN_WIDTH: int = 170
 const BASE_DEFAULT_WIDTH: int = -320
 
-var database: AssetDatabase
-
 var _bodies: Dictionary = {}
 var _current_type: String = ""
 
@@ -228,9 +226,8 @@ func refresh_tags(selected_paths: Array) -> void:
 func apply_tag_change(selected_paths: Array, tag_text: String, add: bool) -> void:
 	_tag_editor.apply_tag_change(selected_paths, tag_text, add)
 
-func set_database(p_database: AssetDatabase) -> void:
-	database = p_database
-	_tag_editor.database = p_database
+func set_catalog(catalog: AssetCatalog) -> void:
+	_tag_editor.catalog = catalog
 
 func flash_send_result(summary: String) -> void:
 	var original := _send_button.text

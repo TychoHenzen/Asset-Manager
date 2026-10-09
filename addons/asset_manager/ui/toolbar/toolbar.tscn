@@ -20,10 +20,10 @@ tooltip_text = "Add assets"
 text = "Add"
 flat = false
 
-[node name="RebuildButton" type="Button" parent="HBox" unique_id=1544584148]
+[node name="ScanButton" type="Button" parent="HBox" unique_id=1544584148]
 layout_mode = 2
-tooltip_text = "Rebuild Index"
-text = "Rebuild"
+tooltip_text = "Scan for new, changed and removed files"
+text = "Scan"
 
 [node name="SearchInput" type="LineEdit" parent="HBox" unique_id=29919236]
 layout_mode = 2

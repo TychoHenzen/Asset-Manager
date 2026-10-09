@@ -3,8 +3,11 @@
 class_name AssetManager
 extends Control
 
-## The shell. Owns the workspace, the database and the current selection, and
+## The shell. Owns the workspace, the catalog and the current selection, and
 ## wires the four components together, it draws nothing itself.
+## Nothing here touches the library's files on the main thread: the catalog
+## and the thumbnail loader do their disk work in the background and answer
+## with signals, so a NAS-sized library never stalls the editor.
 ## Selection lives here rather than in the grid: the preview, the tag editor
 ## and the action buttons all need it, and having each reach into the grid to
 ## ask would couple them to whatever widget the grid happens to use.
@@ -15,9 +18,10 @@ var current_selected_path: String = ""
 var current_workspace_path: String = ""
 
 var _workspace_picker: WorkspacePicker
-var _database: AssetDatabase
+var _catalog: AssetCatalog
+var _scan_starting: bool = false
 var _settings: SettingsManager = SettingsManager.new()
-var _thumbnails: ThumbnailCache = ThumbnailCache.new()
+var _thumbnails: ThumbnailLoader
 var _progress_dialog: ImportProgressDialog
 
 const PROGRESS_DIALOG_SCENE := preload("res://addons/asset_manager/ui/import_progress/import_progress.tscn")
@@ -49,10 +53,15 @@ func _ready() -> void:
 
 	_progress_dialog = PROGRESS_DIALOG_SCENE.instantiate()
 	add_child(_progress_dialog)
+	_progress_dialog.stop_requested.connect(_on_stop_scan)
+
+	_thumbnails = ThumbnailLoader.new()
+	add_child(_thumbnails)
 
 	_sidebar.filter_changed.connect(_on_filter_changed)
 	_sidebar.open_folder_requested.connect(func(path: String) -> void: OS.shell_open(path))
 	_sidebar.add_requested.connect(_on_add_pressed)
+	_sidebar.rescan_requested.connect(rescan_folder)
 	_grid.selection_changed.connect(_on_selection_changed)
 	_grid.open_location_requested.connect(_on_open_location_pressed)
 	_grid.open_external_requested.connect(_on_open_external_pressed)
@@ -67,7 +76,7 @@ func _ready() -> void:
 	_preview.tag_search_changed.connect(_on_tag_input_text_changed)
 
 	toolbar.search_changed.connect(func(_text: String) -> void: _on_filter_changed())
-	toolbar.rebuild_pressed.connect(_on_rebuild_pressed)
+	toolbar.scan_pressed.connect(_on_scan_pressed)
 	toolbar.add_pressed.connect(_on_add_pressed)
 	toolbar.settings_pressed.connect(func() -> void: project_settings_dialog.open())
 	project_settings_dialog.switch_workspace_requested.connect(_on_switch_workspace)
@@ -123,14 +132,11 @@ func _shortcut_input(event: InputEvent) -> void:
 		toolbar.focus_search_and_select()
 		get_viewport().set_input_as_handled()
 
-## Only reads index.db's version field, not the full asset list.
+## Reads the store's two 16-byte headers in the background; the catalog emits
+## Changed only when another machine wrote since we loaded.
 func sync_if_stale() -> void:
-	if _database == null:
-		return
-	if _database.has_newer_version_on_disk():
-		_database.sync()
-		_refresh_all_after_index_change()
-		print("AssetManager: synced, version ", _database.version, ", assets: ", _database.assets.size())
+	if _catalog != null:
+		_catalog.CheckStale()
 
 func _refresh_all_after_index_change() -> void:
 	_sidebar.refresh()
@@ -147,38 +153,60 @@ func _on_filter_changed() -> void:
 		_sidebar.active_type_id
 	)
 
-## Entry point for the FileSystem dock's Send to Asset Manager, which has no
-## panel of its own to rebuild from.
-func rebuild_index() -> void:
-	_on_rebuild_pressed()
-
-func _on_rebuild_pressed() -> void:
-	if current_workspace_path.is_empty():
+## Scans one folder (or the whole workspace) for new, changed and removed
+## files. Used by the sidebar, by Add, and by the FileSystem dock's Send to
+## Asset Manager, which only need the folder that just changed looked at.
+func rescan_folder(path: String) -> void:
+	if _catalog == null or _catalog.IsScanning or _scan_starting:
 		return
 
-	# Sync must always happen before rebuild, so a rebuild from a stale local
-	# base can't silently drop tag changes a teammate wrote since our last sync.
-	sync_if_stale()
-
-	toolbar.set_rebuilding(true)
-
-	var importer := AssetImporter.new()
-	importer.progress.connect(_progress_dialog.on_progress)
+	# Set across the material step below, which yields frames before the
+	# catalog itself reports a scan.
+	_scan_starting = true
+	toolbar.set_scanning(true)
 	_progress_dialog.start()
 
-	var started := Time.get_ticks_msec()
-	var ok := await importer.run_import(current_workspace_path, _database, self)
-	var elapsed := (Time.get_ticks_msec() - started) / 1000.0
+	# Material folders become .tres files before they are indexed, so the
+	# generator runs first, off the main thread, for scans that cover them.
+	var materials_root := current_workspace_path.path_join("materials")
+	if path == current_workspace_path or path.begins_with(materials_root):
+		_progress_dialog.on_progress({"stage": "scan", "label": "Building materials", "current": 0, "total": 0})
+		await _run_off_main_thread(func() -> void:
+			MaterialsImportRunner.run(materials_root, AssetTypes.get_by_id("materials")))
 
-	_progress_dialog.finish()
-	toolbar.set_rebuilding(false)
+	_scan_starting = false
+	_catalog.Scan(path)
 
-	if ok:
-		print("AssetManager: rebuilt index: %d assets in %.1fs (by type: %s), version %d"
-			% [_database.assets.size(), elapsed, importer.per_type_counts, _database.version])
-		_refresh_all_after_index_change()
+## The toolbar button scans everything, or stops the scan that is running.
+func _on_scan_pressed() -> void:
+	if _catalog == null:
+		return
+	if _catalog.IsScanning:
+		_on_stop_scan()
 	else:
-		push_error("AssetManager: failed to write index.db")
+		rescan_folder(current_workspace_path)
+
+func _on_stop_scan() -> void:
+	if _catalog != null:
+		_catalog.CancelScan()
+
+func _on_scan_progressed(stage: String, label: String, current: int, total: int) -> void:
+	_progress_dialog.on_progress({"stage": stage, "label": label, "current": current, "total": total})
+
+func _on_scan_finished(added: int, changed: int, removed: int, total: int, cancelled: bool, root: String, seconds: float) -> void:
+	_progress_dialog.finish()
+	toolbar.set_scanning(false)
+	print("AssetManager: scanned %s in %.1fs%s: %d added, %d changed, %d removed, %d assets"
+		% [root, seconds, " (stopped)" if cancelled else "", added, changed, removed, total])
+	if added + changed + removed > 0:
+		_refresh_all_after_index_change()
+
+## Runs `work` on the WorkerThreadPool and yields frames until it is done.
+func _run_off_main_thread(work: Callable) -> void:
+	var task_id := WorkerThreadPool.add_task(work)
+	while not WorkerThreadPool.is_task_completed(task_id):
+		await get_tree().process_frame
+	WorkerThreadPool.wait_for_task_completion(task_id)
 
 ## A zip or a single file of the chosen type. The type is picked before the file
 ## so an extension shared by two buckets (.ogg, .tscn) never has to be guessed.
@@ -260,21 +288,20 @@ func _on_dropped_type_chosen(id: int, path: String, candidates: PackedStringArra
 	_add_type_id = candidates[id]
 	add_dialog.ask(candidates[id], path, current_workspace_path)
 
-## Files land first, then a rebuild indexes them. Nothing already in the index
-## is re-thumbnailed, so only what just arrived costs anything.
+## Files land first, then only the folder they landed in is scanned.
 func _on_add_confirmed(type_id: String, source_path: String, format: String, variant: String, dest_root: String) -> void:
-	# Extraction is one long synchronous write, so the dialog has to paint this
-	# before it starts or the editor just stops for a few seconds.
 	_progress_dialog.start()
-	_progress_dialog.on_progress({"stage": "scan", "label": "Extracting…", "current": 0, "total": 1})
-	await get_tree().process_frame
+	_progress_dialog.on_progress({"stage": "scan", "label": "Extracting", "current": 0, "total": 0})
 
-	var result: Dictionary
-	if source_path.get_extension().to_lower() == "zip":
-		result = AssetAdd.extract(source_path, type_id, format, variant, dest_root)
-	else:
-		result = AssetExporter.new_result()
-		AssetExporter.copy_one_file(source_path, dest_root.path_join(source_path.get_file()), result)
+	# Extraction writes every file of the pack to the workspace, which on a NAS
+	# takes long enough to freeze the editor if it ran here.
+	var result: Dictionary = {}
+	await _run_off_main_thread(func() -> void:
+		if source_path.get_extension().to_lower() == "zip":
+			result.merge(AssetAdd.extract(source_path, type_id, format, variant, dest_root))
+		else:
+			result.merge(AssetExporter.new_result())
+			AssetExporter.copy_one_file(source_path, dest_root.path_join(source_path.get_file()), result))
 
 	for error_message in result["errors"]:
 		push_error("AssetManager: ", error_message)
@@ -283,7 +310,7 @@ func _on_add_confirmed(type_id: String, source_path: String, format: String, var
 
 	_progress_dialog.finish()
 	if result["copied_count"] > 0:
-		await _on_rebuild_pressed()
+		rescan_folder(dest_root)
 
 func _on_add_tag_requested(tag_text: String) -> void:
 	sync_if_stale()
@@ -295,7 +322,7 @@ func _on_remove_tag_requested(tag_text: String) -> void:
 	_preview.apply_tag_change(_selected_paths(), tag_text, false)
 
 	# The tag just removed may have been the last instance anywhere.
-	if not _database.get_all_known_tags().has(tag_text) and _sidebar.active_tags.has(tag_text):
+	if not _catalog.KnownTags().has(tag_text) and _sidebar.active_tags.has(tag_text):
 		_sidebar.active_tags.erase(tag_text)
 		_on_filter_changed()
 
@@ -308,17 +335,13 @@ func _init_workspace_picker() -> void:
 	_workspace_picker = preload("res://addons/asset_manager/ui/workspace_picker/workspace_picker.tscn").instantiate()
 	_workspace_picker.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(_workspace_picker)
-	# Only a real click builds a missing index, opening the editor on some
-	# other tab shouldn't kick off a long import nobody asked for.
-	_workspace_picker.workspace_opened.connect(func(path: String) -> void:
-		_on_workspace_opened(path, true)
-	)
+	_workspace_picker.workspace_opened.connect(_on_workspace_opened)
 
 	var remembered_path := _workspace_picker.try_auto_load()
 	if remembered_path.is_empty():
 		_show_workspace_picker(true)
 	else:
-		_on_workspace_opened(remembered_path, false)
+		_on_workspace_opened(remembered_path)
 
 ## Forgets which workspace was open and returns to the picker. Nothing on disk
 ## is touched: the workspace is still there, it just isn't the one in front.
@@ -328,7 +351,7 @@ func _on_switch_workspace() -> void:
 	AssetManagerConfig.set_value("workspace", "path", "")
 	current_workspace_path = ""
 	current_selected_path = ""
-	_database = null
+	_close_catalog()
 
 	_sidebar.active_folder_prefix = ""
 	_sidebar.active_type_id = ""
@@ -344,28 +367,43 @@ func _show_workspace_picker(is_visible: bool) -> void:
 	_workspace_picker.visible = is_visible
 	$MarginContainer.visible = not is_visible
 
-func _on_workspace_opened(path: String, from_picker: bool = false) -> void:
+## The catalog loads in the background; the panels fill in on Opened.
+func _on_workspace_opened(path: String) -> void:
 	current_workspace_path = path
 	_show_workspace_picker(false)
 
-	_database = AssetDatabase.new()
-	_database.workspace_path = path
-	_preview.set_database(_database)
-	_sidebar.database = _database
-	_sidebar.workspace_path = path
-	_thumbnails.setup(path)
-	_grid.setup(_database, _settings, _thumbnails)
+	_close_catalog()
+	_catalog = AssetCatalog.new()
+	_catalog.Setup(path, JSON.stringify(AssetTypes.ALL))
+	# Bound methods only: a lambda connected to a C# signal crashes Godot on
+	# exit (see AssetCatalog).
+	_catalog.Opened.connect(_on_catalog_opened)
+	_catalog.ScanProgressed.connect(_on_scan_progressed)
+	_catalog.ScanFinished.connect(_on_scan_finished)
+	_catalog.Changed.connect(_refresh_all_after_index_change)
 
-	var had_index := _database.sync()
-	print("AssetManager: workspace opened, index found: ", had_index, ", version: ", _database.version, ", assets: ", _database.assets.size())
+	_preview.set_catalog(_catalog)
+	_sidebar.set_catalog(_catalog, path)
+	_thumbnails.setup(path, _catalog)
+	_grid.setup(_catalog, _settings, _thumbnails)
+	_catalog.Open()
+
+## `needs_scan` is true for a workspace that was never indexed, or whose index
+## came from the pre-fork index.db and has no file sizes yet. A scan runs in
+## the background, so it starts straight away rather than waiting to be asked.
+func _on_catalog_opened(count: int, needs_scan: bool) -> void:
+	print("AssetManager: workspace opened, %d assets%s" % [count, ", scanning" if needs_scan else ""])
 	_refresh_all_after_index_change()
+	if needs_scan:
+		rescan_folder(current_workspace_path)
 
-	# A workspace with no index is brand new or had one deleted, and building
-	# it is the only useful next step. Deferred so the empty grid paints first:
-	# going straight from the picker to a progress dialog looks like the picker
-	# hung.
-	if not had_index and from_picker:
-		call_deferred("_on_rebuild_pressed")
+func _close_catalog() -> void:
+	if _catalog != null:
+		_catalog.Shutdown()
+	_catalog = null
+
+func _exit_tree() -> void:
+	_close_catalog()
 
 ## Multi-select is gone, the preview never supported it. Kept as an array
 ## because the tag editor still takes one.
@@ -379,7 +417,7 @@ func _on_selection_changed(path: String) -> void:
 	_preview.set_actions_enabled(has_selection)
 
 	if has_selection:
-		_preview.show_asset(path, _database.get_type_for_path(path))
+		_preview.show_asset(path, _catalog.TypeOf(path))
 		asset_selected.emit(path)
 	else:
 		_preview.clear()
@@ -398,7 +436,7 @@ func _on_send_to_project_pressed() -> void:
 	if current_selected_path.is_empty():
 		return
 
-	var type_id := _database.get_type_for_path(current_selected_path)
+	var type_id := _catalog.TypeOf(current_selected_path)
 	if type_id.is_empty():
 		return
 

@@ -312,10 +312,10 @@ static func preload_binaries(path: String, bucket: String, seen: Dictionary = {}
 			_resource_cache[real_path] = loaded
 			_cache_mutex.unlock()
 
-## Lives for a whole import rather than one effect: packs share textures across
+## Lives for a whole page of thumbnails rather than one effect: packs share textures across
 ## their scenes far more than within any single one, so a per-effect cache only
-## caught a fraction of the reuse. The stage clears it when the run finishes,
-## nothing on disk changes mid-import, so entries can't go stale during one.
+## caught a fraction of the reuse. LazyThumbnailRenderer clears it once its queue drains,
+## so a texture loaded for one page is never kept past it.
 static func clear_cache() -> void:
 	_cache_mutex.lock()
 	_resource_cache.clear()

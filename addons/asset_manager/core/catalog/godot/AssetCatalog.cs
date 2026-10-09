@@ -19,7 +19,9 @@ namespace AssetManager.Bridge;
 [GlobalClass]
 public partial class AssetCatalog : RefCounted
 {
-	[Signal] public delegate void OpenedEventHandler(int count, bool fromDisk);
+	/// `needsScan`: there was no catalog.bin, the workspace is new or was only
+	/// migrated from index.db (which has no file sizes).
+	[Signal] public delegate void OpenedEventHandler(int count, bool needsScan);
 	[Signal] public delegate void ScanProgressedEventHandler(string stage, string label, int current, int total);
 	[Signal] public delegate void ScanFinishedEventHandler(int added, int changed, int removed, int total, bool cancelled, string root, double seconds);
 	[Signal] public delegate void QueryReadyEventHandler(int requestId, string[] paths, string[] types, long[] sizes, long[] mtimes, int total, int page, int totalPages);
@@ -53,15 +55,16 @@ public partial class AssetCatalog : RefCounted
 		_store = new CatalogStore(WorkspacePath);
 	}
 
-	/// Loads catalog.bin, or migrates an old index.db. Emits Opened; fromDisk
-	/// is false for a workspace that has never been indexed.
+	/// Loads catalog.bin, or migrates an old index.db. Emits Opened.
 	public void Open()
 	{
 		_work.Run(_ =>
 		{
-			var fromDisk = _store.TryLoad(_catalog) || IndexDbMigration.TryMigrate(WorkspacePath, _catalog);
+			var loaded = _store.TryLoad(_catalog);
+			if (!loaded)
+				IndexDbMigration.TryMigrate(WorkspacePath, _catalog);
 			var count = _catalog.Count;
-			BackgroundWork.OnMainThread(() => EmitSignal(SignalName.Opened, count, fromDisk));
+			BackgroundWork.OnMainThread(() => EmitSignal(SignalName.Opened, count, !loaded));
 		}, "opening the catalog");
 	}
 

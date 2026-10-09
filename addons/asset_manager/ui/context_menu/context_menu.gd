@@ -6,8 +6,8 @@ extends EditorContextMenuPlugin
 
 const DIALOG_SCENE := preload("res://addons/asset_manager/ui/ingest_dialog/ingest_dialog.tscn")
 
-## Set by plugin.gd. The index is rebuilt through the panel because that is
-## where the database and the viewport the thumbnails render into live.
+## Set by plugin.gd. The new pack is scanned through the panel because that is
+## where the catalog lives.
 var main_panel: Control
 
 func _popup_menu(paths: PackedStringArray) -> void:
@@ -47,15 +47,17 @@ func _on_send(paths: PackedStringArray, bucket: String) -> void:
 	var dialog: IngestDialog = DIALOG_SCENE.instantiate()
 	EditorInterface.get_base_control().add_child(dialog)
 	dialog.confirmed_with_name.connect(func(folder_name: String, vendor: String) -> void:
-		_run_ingest(paths[0], bucket, folder_name, workspace_path, vendor)
+		var pack_path := _run_ingest(paths[0], bucket, folder_name, workspace_path, vendor)
 		dialog.queue_free()
-		if main_panel != null and main_panel.has_method("rebuild_index"):
-			main_panel.rebuild_index()
+		if main_panel != null and main_panel.has_method("rescan_folder"):
+			main_panel.rescan_folder(pack_path)
 	)
 	dialog.canceled.connect(dialog.queue_free)
 	dialog.ask(paths[0], bucket, workspace_path)
 
-static func _run_ingest(source_path: String, bucket: String, folder_name: String, workspace_path: String, vendor: String) -> void:
+## Returns the pack folder the files went to, the only part of the workspace
+## that needs scanning afterwards.
+static func _run_ingest(source_path: String, bucket: String, folder_name: String, workspace_path: String, vendor: String) -> String:
 	var result := AssetIngest.ingest_asset(source_path, bucket, folder_name, workspace_path, vendor)
 
 	for error: String in result["errors"]:
@@ -63,6 +65,7 @@ static func _run_ingest(source_path: String, bucket: String, folder_name: String
 
 	var below := folder_name if vendor.is_empty() else vendor.path_join(folder_name)
 	print("AssetManager: sent %d file(s) to %s/%s" % [result["copied_count"], bucket, below])
+	return workspace_path.path_join(bucket).path_join(below)
 
 ## Every bucket whose extension list claims this file. One means no question to
 ## ask; two (audio, .tscn) means the user picks; a .tres is decided by its header.

@@ -11,9 +11,6 @@ extends RefCounted
 
 const FOV: float = 120.0
 
-static func work_kind() -> int:
-	return ThumbnailStage.WORK_VIEWPORT
-
 static func prepare(path: String) -> Variant:
 	var image := Image.load_from_file(path)
 	if image == null or image.is_empty():

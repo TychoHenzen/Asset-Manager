@@ -6,19 +6,25 @@ namespace AssetManager.Core;
 
 /// The in-memory index. Every public member is safe to call from any thread:
 /// queries run on background tasks while the main thread edits tags.
-/// Mutations take one lock; the slow part of a scan (walking the disk and
-/// reading resource headers) happens before the lock is taken.
+/// The lock is only held for dictionary work. Anything that walks or sorts
+/// the whole record set (queries, stats, known tags, scan planning) takes a
+/// snapshot under the lock and does the slow part outside it, so a
+/// main-thread call like TagsOf never waits behind a query.
 public sealed class Catalog
 {
 	private readonly object _gate = new();
 	private readonly Dictionary<string, AssetRecord> _byPath = new(StringComparer.Ordinal);
 	private readonly TagTable _tags = new();
 
-	// Each sort order is built once and reused until the next mutation, so a
-	// query is one filtered walk and never a sort.
-	private AssetRecord[]? _byName;
-	private AssetRecord[]? _bySize;
-	private AssetRecord[]? _byRecent;
+	// Each sort order is built once per version of the record set, so a query
+	// is one filtered walk and never a sort.
+	private readonly SortOrders _orders = new();
+	private int _recordsVersion;
+
+	// The tag editor asks on every keystroke; walking 300k records each time
+	// is too slow for the main thread.
+	private string[]? _knownTags;
+	private int _tagsVersion;
 
 	public Catalog(TypeTable types) => Types = types;
 
@@ -110,6 +116,7 @@ public sealed class Catalog
 			if (!_byPath.TryGetValue(relPath, out var record))
 				return false;
 			record.UserTags = tags.Select(_tags.Intern).Distinct().ToArray();
+			TagsChanged();
 			return true;
 		}
 	}
@@ -135,6 +142,7 @@ public sealed class Catalog
 				if (_byPath.TryGetValue(path, out var record))
 					record.UserTags = tags.Select(_tags.Intern).Distinct().ToArray();
 			}
+			TagsChanged();
 		}
 	}
 
@@ -153,52 +161,84 @@ public sealed class Catalog
 	/// Every tag some asset currently carries, sorted.
 	public string[] KnownTags()
 	{
+		AssetRecord[] records;
+		string[] names;
+		int version;
 		lock (_gate)
 		{
-			var used = new HashSet<int>();
-			foreach (var record in _byPath.Values)
-				used.UnionWith(record.Tags);
-			return NamesOf(used).OrderBy(t => t, StringComparer.Ordinal).ToArray();
+			if (_knownTags != null)
+				return _knownTags;
+			records = _byPath.Values.ToArray();
+			names = _tags.Names.ToArray();
+			version = _tagsVersion;
 		}
+
+		var used = new HashSet<int>();
+		foreach (var record in records)
+			used.UnionWith(record.Tags);
+		var known = used.Select(id => names[id]).OrderBy(t => t, StringComparer.Ordinal).ToArray();
+
+		lock (_gate)
+		{
+			if (version == _tagsVersion)
+				_knownTags = known;
+		}
+		return known;
 	}
 
+	/// Runs outside the lock. A record removed meanwhile can still appear in
+	/// this one answer; the next query will not have it.
 	public QueryPage Query(CatalogQuery query)
 	{
+		var order = OrderFor(query.SearchTermLower.Length > 0 ? SortMode.Name : query.Sort);
+		var collector = new PageCollector(Math.Max(0, query.Page), query.PerPage);
+
+		int[] tagIds;
+		string[] tagNames;
+		bool resolved;
 		lock (_gate)
 		{
-			var collector = new PageCollector(Math.Max(0, query.Page), query.PerPage);
-			if (TryResolveTags(query.Tags, out var tagIds))
-			{
-				var matcher = new CatalogMatcher(query, tagIds, _tags.Names);
-				foreach (var record in InDisplayOrder(matcher, query.Sort))
-					collector.Take(record);
-			}
-
-			// The filter shrank under the page the grid was on: show the last one.
-			if (collector.OverShot)
-				return Query(query.WithPage(collector.LastPage));
-
-			var totalPages = collector.LastPage + 1;
-			return new QueryPage(collector.Items, collector.Total, Math.Clamp(query.Page, 0, totalPages - 1), totalPages);
+			resolved = TryResolveTags(query.Tags, out tagIds);
+			tagNames = _tags.Names.ToArray();
 		}
+
+		if (resolved)
+		{
+			var matcher = new CatalogMatcher(query, tagIds, tagNames);
+			foreach (var record in InDisplayOrder(matcher, order))
+				collector.Take(record);
+		}
+
+		// The filter shrank under the page the grid was on: show the last one.
+		if (collector.OverShot)
+			return Query(query.WithPage(collector.LastPage));
+
+		var totalPages = collector.LastPage + 1;
+		return new QueryPage(collector.Items, collector.Total, Math.Clamp(query.Page, 0, totalPages - 1), totalPages);
 	}
 
 	public CatalogStats Stats(string prefix)
 	{
+		AssetRecord[] records;
+		string[] tagNames;
 		lock (_gate)
-			return CatalogStatsBuilder.Build(_byPath.Values, prefix, _tags.Names);
+		{
+			records = _byPath.Values.ToArray();
+			tagNames = _tags.Names.ToArray();
+		}
+		return CatalogStatsBuilder.Build(records, prefix, tagNames);
 	}
 
 	/// A search puts exact filename hits first, because a fuzzy hit on a long
-	/// name otherwise outranks the file the user actually typed.
-	private IEnumerable<AssetRecord> InDisplayOrder(CatalogMatcher matcher, SortMode sort)
+	/// name otherwise outranks the file the user actually typed. `order` is
+	/// by name whenever there is a search.
+	private static IEnumerable<AssetRecord> InDisplayOrder(CatalogMatcher matcher, AssetRecord[] order)
 	{
 		if (!matcher.HasSearch)
-			return OrderFor(sort).Where(matcher.Matches);
+			return order.Where(matcher.Matches);
 
-		var byName = OrderFor(SortMode.Name);
-		return byName.Where(r => matcher.Matches(r) && matcher.FileNameContainsTerm(r))
-			.Concat(byName.Where(r => matcher.Matches(r) && !matcher.FileNameContainsTerm(r)));
+		return order.Where(r => matcher.Matches(r) && matcher.FileNameContainsTerm(r))
+			.Concat(order.Where(r => matcher.Matches(r) && !matcher.FileNameContainsTerm(r)));
 	}
 
 	/// False when a wanted tag is unknown, which no asset can match.
@@ -215,21 +255,35 @@ public sealed class Catalog
 
 	private string[] NamesOf(IEnumerable<int> ids) => ids.Select(id => _tags[id]).ToArray();
 
-	private AssetRecord[] OrderFor(SortMode sort) => sort switch
+	private AssetRecord[] OrderFor(SortMode sort)
 	{
-		SortMode.Size => _bySize ??= _byPath.Values
-			.OrderByDescending(r => r.Size).ThenBy(r => r.RelPath, StringComparer.Ordinal).ToArray(),
-		SortMode.Recent => _byRecent ??= _byPath.Values
-			.OrderByDescending(r => r.DateAdded).ThenBy(r => r.RelPath, StringComparer.Ordinal).ToArray(),
-		_ => _byName ??= _byPath.Values
-			.OrderBy(r => r.FileName, Comparer<string>.Create(TextRules.CompareNoCase))
-			.ThenBy(r => r.RelPath, StringComparer.Ordinal).ToArray(),
-	};
+		AssetRecord[] records;
+		int version;
+		lock (_gate)
+		{
+			var cached = _orders.TryGet(sort, _recordsVersion);
+			if (cached != null)
+				return cached;
+			records = _byPath.Values.ToArray();
+			version = _recordsVersion;
+		}
+
+		var order = SortOrders.Build(records, sort);
+		lock (_gate)
+			_orders.Keep(sort, version, _recordsVersion, order);
+		return order;
+	}
 
 	private void Invalidate()
 	{
-		_byName = null;
-		_bySize = null;
-		_byRecent = null;
+		_recordsVersion++;
+		_orders.Clear();
+		TagsChanged();
+	}
+
+	private void TagsChanged()
+	{
+		_tagsVersion++;
+		_knownTags = null;
 	}
 }

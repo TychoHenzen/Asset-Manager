@@ -14,9 +14,6 @@ extends RefCounted
 ## as the knob if a still capture ever needs the effect already developed.
 const WARMUP_SECONDS: float = 0.0
 
-static func work_kind() -> int:
-	return ThumbnailStage.WORK_VIEWPORT
-
 ## Main thread, before the workers start. Binary resources are ~70x slower to
 ## load off-thread, fetch them here and cache for the parse to find.
 ## Safe to thread the parse afterwards: RenderingServer::texture_2d_create
@@ -40,7 +37,7 @@ static func reuses_main_viewport() -> bool:
 static func wants_animation() -> bool:
 	return true
 
-## Loads and warms an effect without capturing, lets the stage render a whole
+## Loads and warms an effect without capturing, lets LazyThumbnailRenderer render a whole
 ## chunk in one frame (ThumbnailViewport.capture_batch).
 ## 2D effects return null and fall back to render_prepared below, they draw to
 ## a canvas rather than into the 3D world, can't share a batch.
@@ -76,14 +73,14 @@ static func render_prepared(_prepared: Variant, viewport: ThumbnailViewport, pat
 	if node is Node3D:
 		image = await viewport.capture(node as Node3D)
 	elif node is Node2D:
-		image = await viewport.capture_2d(node as Node2D, ThumbnailCache.ANIMATED_THUMB_SIZE)
+		image = await viewport.capture_2d(node as Node2D, ThumbnailSizes.ANIMATED_THUMB_SIZE)
 	else:
 		node.free()
 
 	return image
 
 ## 3d or 2d per effect, recorded while build_subject picks a capture path and
-## collected by the stage once the run is done.
+## collected by LazyThumbnailRenderer after each chunk.
 static var subtype: Dictionary = {}
 
 static func take_subtype() -> Dictionary:

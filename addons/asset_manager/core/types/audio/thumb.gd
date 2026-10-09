@@ -9,9 +9,6 @@ extends RefCounted
 const WAVE_COLOR: Color = Color(0.45, 0.78, 1.0)
 const BG_COLOR: Color = Color(0.12, 0.13, 0.16, 1.0)
 
-static func work_kind() -> int:
-	return ThumbnailStage.WORK_VIEWPORT
-
 static func prepare(_path: String) -> Variant:
 	return null
 
@@ -25,11 +22,11 @@ static func render_prepared(_prepared: Variant, _viewport: ThumbnailViewport, pa
 		return null
 
 	var generator := WaveformGenerator.new()
-	var peaks: Array[Vector2] = await generator.generate_peaks_async(stream, ThumbnailCache.THUMB_SIZE)
+	var peaks: Array[Vector2] = await generator.generate_peaks_async(stream, ThumbnailSizes.THUMB_SIZE)
 	if peaks.is_empty():
 		return null
 
-	return _paint(peaks, ThumbnailCache.THUMB_SIZE)
+	return _paint(peaks, ThumbnailSizes.THUMB_SIZE)
 
 ## Embedded ID3 artwork, MP3 only in practice. The extractor hands back a
 ## Texture2D for the preview, but the cache stores Images.
