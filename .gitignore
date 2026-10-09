@@ -16,3 +16,6 @@ obj/
 
 # Written by the addon into any workspace it opens (index, thumbnails)
 .assetmanager/
+
+# Godot imports the README cover image once the dev host project opens; it is not an asset
+/cover.png.import
