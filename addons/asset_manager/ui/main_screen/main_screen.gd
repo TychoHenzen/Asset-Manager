@@ -28,6 +28,9 @@ var _pending_removal: PackedStringArray = []
 ## Tags the newest version lookup, so a late answer for an earlier selection
 ## is dropped.
 var _versions_request: int = 0
+## The sidebar folder as last saved, relative to the workspace, so a search
+## keystroke does not rewrite the settings file.
+var _remembered_folder: String = ""
 
 const PROGRESS_DIALOG_SCENE := preload("res://addons/asset_manager/ui/import_progress/import_progress.tscn")
 
@@ -171,6 +174,25 @@ func _on_filter_changed() -> void:
 		toolbar.search_text(),
 		_sidebar.active_type_id
 	)
+	_remember_folder()
+
+func _remember_folder() -> void:
+	var prefix := _sidebar.active_folder_prefix
+	var relative := "" if prefix.is_empty() else prefix.trim_prefix(current_workspace_path).trim_prefix("/")
+	if relative != _remembered_folder:
+		_remembered_folder = relative
+		_settings.set_last_folder(relative)
+
+## Puts the sidebar back on the folder last looked at, before the first query
+## runs: the All view sorts and groups every type, the 1.58M images included,
+## where a sounds folder costs a fraction of that.
+func _restore_folder() -> void:
+	_remembered_folder = _settings.get_last_folder()
+	var type_id := _remembered_folder.get_slice("/", 0)
+	if _remembered_folder.is_empty() or AssetTypes.get_by_id(type_id).is_empty():
+		return
+	_sidebar.active_folder_prefix = current_workspace_path.path_join(_remembered_folder)
+	_sidebar.active_type_id = type_id
 
 ## Scans one folder (or the whole workspace) for new, changed and removed
 ## files. Used by the sidebar, by Add, and by the FileSystem dock's Send to
@@ -388,6 +410,9 @@ func _on_switch_workspace() -> void:
 
 	_sidebar.active_folder_prefix = ""
 	_sidebar.active_type_id = ""
+	# A folder of this workspace means nothing in the next one.
+	_remembered_folder = ""
+	_settings.set_last_folder("")
 	_sidebar.active_tags.clear()
 	_sidebar.active_extensions.clear()
 	toolbar.set_search_text("")
@@ -406,6 +431,7 @@ func _on_workspace_opened(path: String) -> void:
 	_show_workspace_picker(false)
 
 	_close_catalog()
+	_restore_folder()
 	_catalog = AssetCatalog.new()
 	_catalog.Setup(path, JSON.stringify(AssetTypes.ALL))
 	# Bound methods only: a lambda connected to a C# signal crashes Godot on

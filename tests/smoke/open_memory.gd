@@ -33,6 +33,11 @@ func _run() -> void:
 	await catalog.StatsReady
 	_mark("sidebar stats")
 	await _pause()
+	# The editor opens with nothing picked in the sidebar: its first page is
+	# the All view.
+	await _query(catalog, 3, "")
+	_mark("all page")
+	await _pause()
 	await _query(catalog, 1, workspace.path_join("sounds"))
 	_mark("sounds page")
 	await _pause()
