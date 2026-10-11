@@ -18,11 +18,21 @@ internal static class CatalogStatsBuilder
 		var scopedTagCounts = new Dictionary<int, int>();
 		var extensions = new Dictionary<string, int>(StringComparer.Ordinal);
 		var total = 0;
+		AssetFolder? lastFolder = null;
+		TypeFolderStats? lastStats = null;
 
 		foreach (var r in records)
 		{
 			total++;
-			AddFolders(folders, r.RelPath);
+			// Records come folder by folder, so the folder's place in the tree
+			// is worked out once per folder, not once per file.
+			if (!ReferenceEquals(r.Folder, lastFolder))
+			{
+				lastFolder = r.Folder;
+				lastStats = AddFolders(folders, r.Folder.Path);
+			}
+			if (lastStats != null)
+				lastStats.Count++;
 
 			var tags = r.Tags;
 			foreach (var id in tags)
@@ -52,27 +62,27 @@ internal static class CatalogStatsBuilder
 		};
 	}
 
-	private static void AddFolders(Dictionary<string, TypeFolderStats> folders, string relPath)
+	/// Puts the folder of a file into the tree and returns its type's entry
+	/// for the caller to count the file in, null for a folder outside any type.
+	private static TypeFolderStats? AddFolders(Dictionary<string, TypeFolderStats> folders, string folder)
 	{
-		var first = relPath.IndexOf('/');
-		if (first < 0)
-			return;
+		if (folder.Length == 0)
+			return null;
+		var segments = folder.Split('/', 4);
 
-		var typeId = relPath[..first];
+		var typeId = segments[0];
 		if (!folders.TryGetValue(typeId, out var stats))
 			folders[typeId] = stats = new TypeFolderStats();
-		stats.Count++;
 
-		var second = relPath.IndexOf('/', first + 1);
-		if (second < 0)
-			return;
+		if (segments.Length < 2)
+			return stats;
 
-		var sub = relPath[(first + 1)..second];
+		var sub = segments[1];
 		if (!stats.Subfolders.TryGetValue(sub, out var children))
 			stats.Subfolders[sub] = children = new SortedSet<string>(StringComparer.Ordinal);
 
-		var third = relPath.IndexOf('/', second + 1);
-		if (third >= 0)
-			children.Add(relPath[(second + 1)..third]);
+		if (segments.Length >= 3)
+			children.Add(segments[2]);
+		return stats;
 	}
 }

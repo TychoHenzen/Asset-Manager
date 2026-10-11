@@ -27,8 +27,7 @@ internal sealed class CatalogMatcher
 
 	public bool HasSearch => _term.Length > 0;
 
-	public bool FileNameContainsTerm(AssetRecord r) =>
-		r.FileNameLower.Contains(_term, StringComparison.Ordinal);
+	public bool FileNameContainsTerm(AssetRecord r) => TextRules.ContainsLower(r.FileName, _term);
 
 	public bool Matches(AssetRecord r)
 	{
@@ -53,16 +52,17 @@ internal sealed class CatalogMatcher
 
 	private bool MatchesSearch(AssetRecord r, int[] tags)
 	{
-		if (Hit(r.FileNameLower))
+		if (Hit(r.FileName))
 			return true;
 		foreach (var id in tags)
 		{
-			if (Hit(_tagNames[id].ToLowerInvariant()))
+			if (Hit(_tagNames[id]))
 				return true;
 		}
 		return false;
 	}
 
-	private bool Hit(string textLower) =>
-		_exact ? textLower.Contains(_term, StringComparison.Ordinal) : TextRules.IsSubsequence(_term, textLower);
+	/// `text` in any case; the term is lowercased.
+	private bool Hit(string text) =>
+		_exact ? TextRules.ContainsLower(text, _term) : TextRules.IsSubsequence(_term, text);
 }

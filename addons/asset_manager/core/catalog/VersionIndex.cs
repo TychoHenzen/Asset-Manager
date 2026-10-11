@@ -4,28 +4,31 @@ using System.Linq;
 
 namespace AssetManager.Core;
 
-/// Which records are versions of one asset. Two records join when they share
-/// a VersionKey (formats in sibling folders), or a name, size and content
-/// hash (exact copies anywhere). Joins chain: a copy of one format joins that
-/// format's whole group. Only records with company are indexed.
+/// Which records of one type are versions of one asset. Two records join
+/// when they share a version key (formats in sibling folders), or a name,
+/// size and content hash (exact copies anywhere). Joins chain: a copy of one
+/// format joins that format's whole group. Only records with company are
+/// indexed. Both kinds of key need the same type, so each type is grouped on
+/// its own and the All view puts the types' indexes side by side.
 public sealed class VersionIndex
 {
-	private readonly Dictionary<AssetRecord, VersionGroup> _groupOf;
+	private readonly Func<AssetRecord, VersionGroup?> _groupOf;
 
-	private VersionIndex(Dictionary<AssetRecord, VersionGroup> groupOf, int groupCount)
+	private VersionIndex(Func<AssetRecord, VersionGroup?> groupOf, int groupCount, int groupedRecords)
 	{
 		_groupOf = groupOf;
 		GroupCount = groupCount;
+		GroupedRecords = groupedRecords;
 	}
 
-	public static readonly VersionIndex Empty = new(new Dictionary<AssetRecord, VersionGroup>(ReferenceEqualityComparer.Instance), 0);
+	public static readonly VersionIndex Empty = new(_ => null, 0, 0);
 
 	public int GroupCount { get; }
 
-	public int GroupedRecords => _groupOf.Count;
+	public int GroupedRecords { get; }
 
 	/// Null for a record with no other versions.
-	public VersionGroup? GroupOf(AssetRecord record) => _groupOf.GetValueOrDefault(record);
+	public VersionGroup? GroupOf(AssetRecord record) => _groupOf(record);
 
 	public int CountOf(AssetRecord record) => GroupOf(record)?.Members.Count ?? 1;
 
@@ -45,17 +48,24 @@ public sealed class VersionIndex
 		}
 	}
 
-	public static VersionIndex Build(IReadOnlyList<AssetRecord> records, TypeTable types)
+	/// The index of every type at once; `byType[i]` covers type i.
+	public static VersionIndex ByType(IReadOnlyList<VersionIndex> byType) =>
+		new(r => byType[r.Type].GroupOf(r), byType.Sum(v => v.GroupCount), byType.Sum(v => v.GroupedRecords));
+
+	/// `records` are all of type `typeIndex`. The keys are compared in place
+	/// (VersionKeys, CopyKeys): a string per record would cost another copy of
+	/// every path.
+	public static VersionIndex Build(IReadOnlyList<AssetRecord> records, int typeIndex, AssetType type)
 	{
 		var sets = new DisjointSets(records.Count);
-		var firstByKey = new Dictionary<string, int>(StringComparer.Ordinal);
+		var byName = new Dictionary<AssetRecord, int>(new NameKeys(typeIndex, type));
+		var byContent = new Dictionary<AssetRecord, int>(CopyKeys.Instance);
 		for (var i = 0; i < records.Count; i++)
 		{
 			var record = records[i];
-			record.VersionKey ??= VersionKey.For(record.RelPath, types[record.Type]);
-			Join(sets, firstByKey, i, record.VersionKey);
+			Join(sets, byName, i, record);
 			if (record.Hash != null)
-				Join(sets, firstByKey, i, CopyKey(record));
+				Join(sets, byContent, i, record);
 		}
 
 		// Most records are alone; only those with company are collected.
@@ -76,29 +86,55 @@ public sealed class VersionIndex
 		var groupOf = new Dictionary<AssetRecord, VersionGroup>(ReferenceEqualityComparer.Instance);
 		foreach (var members in membersByRoot.Values)
 		{
-			var ordered = members
-				.Select(i => records[i])
-				.OrderBy(r => types[r.Type].ExtensionRank(r.ExtensionLower))
-				.ThenBy(r => r.RelPath, StringComparer.Ordinal)
-				.ToArray();
+			var ordered = members.Select(i => records[i]).ToArray();
+			Array.Sort(ordered, (a, b) =>
+			{
+				var byRank = type.ExtensionRank(a.ExtensionLower).CompareTo(type.ExtensionRank(b.ExtensionLower));
+				return byRank != 0 ? byRank : AssetRecord.ComparePaths(a, b);
+			});
 			var group = new VersionGroup(ordered);
 			foreach (var record in ordered)
 				groupOf[record] = group;
 		}
-		return new VersionIndex(groupOf, membersByRoot.Count);
+		return new VersionIndex(r => groupOf.GetValueOrDefault(r), membersByRoot.Count, groupOf.Count);
 	}
 
-	/// The "\n" separators cannot occur in a path, so the two kinds of key
-	/// never collide with each other.
-	private static string CopyKey(AssetRecord r) =>
-		$"{r.Type}\n{r.FileNameLower}\n{r.Size}\n{Convert.ToHexString(r.Hash!)}";
-
-	private static void Join(DisjointSets sets, Dictionary<string, int> firstByKey, int index, string key)
+	private static void Join(DisjointSets sets, Dictionary<AssetRecord, int> firstByKey, int index, AssetRecord record)
 	{
-		if (firstByKey.TryGetValue(key, out var first))
+		if (firstByKey.TryGetValue(record, out var first))
 			sets.Union(first, index);
 		else
-			firstByKey[key] = index;
+			firstByKey[record] = index;
+	}
+
+	/// VersionKey.For, compared without building it: the folder's key (kept
+	/// per folder) and the stem, ignoring case.
+	private sealed class NameKeys(int typeIndex, AssetType type) : IEqualityComparer<AssetRecord>
+	{
+		public bool Equals(AssetRecord? a, AssetRecord? b) =>
+			ReferenceEquals(a, b)
+			|| (a != null && b != null
+				&& Folder(a) == Folder(b)
+				&& TextRules.EqualsLower(VersionKey.Stem(a.FileName), VersionKey.Stem(b.FileName)));
+
+		public int GetHashCode(AssetRecord r) =>
+			HashCode.Combine(Folder(r), TextRules.HashLower(VersionKey.Stem(r.FileName)));
+
+		private string Folder(AssetRecord r) => r.Folder.VersionFolder(typeIndex, type);
+	}
+
+	/// Exact copies: type, name ignoring case, size and content hash.
+	private sealed class CopyKeys : IEqualityComparer<AssetRecord>
+	{
+		public static readonly CopyKeys Instance = new();
+
+		public bool Equals(AssetRecord? a, AssetRecord? b) =>
+			ReferenceEquals(a, b)
+			|| (a != null && b != null
+				&& SameNameAndSize.Instance.Equals(a, b)
+				&& a.Hash.AsSpan().SequenceEqual(b.Hash));
+
+		public int GetHashCode(AssetRecord r) => SameNameAndSize.Instance.GetHashCode(r);
 	}
 
 	private sealed class DisjointSets

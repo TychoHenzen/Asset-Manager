@@ -52,7 +52,7 @@ public sealed class DuplicateHashing(Catalog catalog, Func<string, byte[]> hashF
 	/// so the order decides how much a stopped pass has already found.
 	public static List<AssetRecord> CandidatesIn(IEnumerable<AssetRecord> records) =>
 		records
-			.GroupBy(r => (r.Type, r.FileNameLower, r.Size))
+			.GroupBy(r => r, SameNameAndSize.Instance)
 			.Where(g => g.Skip(1).Any())
 			.OrderByDescending(g => g.GroupBy(r => r.MTime).Any(m => m.Skip(1).Any()))
 			.ThenByDescending(g => g.Count())

@@ -15,13 +15,14 @@ internal sealed class ScanPlan
 	public List<PlannedChange> Changes { get; } = [];
 	public List<PlannedRetag> Retags { get; } = [];
 
-	/// `existing` must not change while this runs: only one scan runs at a
-	/// time, and only a scan or a load changes the catalog's record set.
+	/// `find` looks up the catalog's record for a path; the record set must
+	/// not change while this runs: only one scan runs at a time, and only a
+	/// scan or a load changes it.
 	/// `tagNames` is a snapshot of the catalog's tag table, to compare an
 	/// existing record's tags against.
 	public static ScanPlan Build(
 		ScanResult walk,
-		IReadOnlyDictionary<string, AssetRecord> existing,
+		Func<string, AssetRecord?> find,
 		IReadOnlyList<string> tagNames,
 		TypeTable types,
 		Func<string, string> resourceTypeOf)
@@ -29,7 +30,7 @@ internal sealed class ScanPlan
 		var plan = new ScanPlan();
 		foreach (var file in walk.Files)
 		{
-			existing.TryGetValue(file.RelPath, out var record);
+			var record = find(file.RelPath);
 			var unchanged = record != null && record.Size == file.Size && record.MTime == file.MTime;
 			var typeIndex = TypeFor(file, unchanged, types, resourceTypeOf);
 			if (typeIndex < 0)

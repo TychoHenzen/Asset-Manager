@@ -11,20 +11,29 @@ namespace AssetManager.Core;
 /// format and keep their files apart.
 public static class VersionKey
 {
-	public static string For(string relPath, AssetType type)
-	{
-		var parent = RelPaths.Parent(relPath);
-		var fileName = RelPaths.FileName(relPath);
-		var dot = fileName.LastIndexOf('.');
-		var stem = dot > 0 ? fileName[..dot] : fileName;
+	public static string For(string relPath, AssetType type) =>
+		FolderOf(RelPaths.Parent(relPath), type) + "/" + Stem(RelPaths.FileName(relPath)).ToString().ToLowerInvariant();
 
+	/// The folder half of the key: `folder` minus its format folders,
+	/// lowercased. The same for every file in the folder, so worked out once
+	/// per folder (AssetFolder keeps it).
+	public static string FolderOf(string folder, AssetType type)
+	{
 		var kept = new List<string>();
-		foreach (var segment in parent.Split('/'))
+		foreach (var segment in folder.Split('/'))
 		{
 			if (!IsFormatFolder(segment, type))
 				kept.Add(segment);
 		}
-		return (string.Join("/", kept) + "/" + stem).ToLowerInvariant();
+		return string.Join("/", kept).ToLowerInvariant();
+	}
+
+	/// The name half of the key, before lowercasing: the file name without
+	/// its extension.
+	public static ReadOnlySpan<char> Stem(string fileName)
+	{
+		var dot = fileName.LastIndexOf('.');
+		return dot > 0 ? fileName.AsSpan(0, dot) : fileName;
 	}
 
 	/// A folder whose name, taken word by word, names one of the type's

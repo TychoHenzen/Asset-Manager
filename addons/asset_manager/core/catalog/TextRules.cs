@@ -16,24 +16,67 @@ public static class TextRules
 		var n = Math.Min(a.Length, b.Length);
 		for (var i = 0; i < n; i++)
 		{
-			var ca = char.ToLowerInvariant(a[i]);
-			var cb = char.ToLowerInvariant(b[i]);
+			var ca = Lower(a[i]);
+			var cb = Lower(b[i]);
 			if (ca != cb)
 				return ca < cb ? -1 : 1;
 		}
 		return a.Length.CompareTo(b.Length);
 	}
 
-	/// String.is_subsequence_ofn, with both sides already lowercased.
-	public static bool IsSubsequence(string queryLower, string textLower)
+	/// char.ToLowerInvariant, with ASCII done inline: sorting 1.58M names
+	/// lowers ~700M characters, nearly all of them ASCII.
+	public static char Lower(char c) =>
+		c < 128 ? (c is >= 'A' and <= 'Z' ? (char)(c | 0x20) : c) : char.ToLowerInvariant(c);
+
+	/// String.is_subsequence_ofn. `queryLower` is already lowercased, `text`
+	/// is lowered a character at a time, so no lowercase copy is made of each
+	/// of 1.77M file names per search.
+	public static bool IsSubsequence(string queryLower, string text)
 	{
 		var q = 0;
-		for (var t = 0; t < textLower.Length && q < queryLower.Length; t++)
+		for (var t = 0; t < text.Length && q < queryLower.Length; t++)
 		{
-			if (textLower[t] == queryLower[q])
+			if (Lower(text[t]) == queryLower[q])
 				q++;
 		}
 		return q == queryLower.Length;
+	}
+
+	/// text.ToLowerInvariant().Contains(termLower), without the copy.
+	public static bool ContainsLower(string text, string termLower)
+	{
+		for (var start = 0; start + termLower.Length <= text.Length; start++)
+		{
+			var i = 0;
+			while (i < termLower.Length && Lower(text[start + i]) == termLower[i])
+				i++;
+			if (i == termLower.Length)
+				return true;
+		}
+		return false;
+	}
+
+	/// a.ToLowerInvariant() == b.ToLowerInvariant(), without the copies.
+	public static bool EqualsLower(ReadOnlySpan<char> a, ReadOnlySpan<char> b)
+	{
+		if (a.Length != b.Length)
+			return false;
+		for (var i = 0; i < a.Length; i++)
+		{
+			if (Lower(a[i]) != Lower(b[i]))
+				return false;
+		}
+		return true;
+	}
+
+	/// A hash that agrees with EqualsLower.
+	public static int HashLower(ReadOnlySpan<char> text)
+	{
+		var hash = new HashCode();
+		foreach (var c in text)
+			hash.Add(Lower(c));
+		return hash.ToHashCode();
 	}
 
 	/// String.is_valid_int: optional sign, then one or more ASCII digits.

@@ -32,7 +32,9 @@ public sealed class CatalogStore
 		if (!File.Exists(CatalogPath))
 			return false;
 
-		var contents = CatalogFile.Deserialize(File.ReadAllBytes(CatalogPath), catalog.Types);
+		CatalogFileContents contents;
+		using (var stream = new FileStream(CatalogPath, FileMode.Open, FileAccess.Read, FileShare.Read, StoreHeader.BufferSize, FileOptions.SequentialScan))
+			contents = CatalogFile.Deserialize(stream, catalog.Types);
 		catalog.Load(contents.Records, contents.TagNames);
 		_catalogGeneration = contents.Generation;
 
@@ -55,7 +57,8 @@ public sealed class CatalogStore
 		lock (_writeGate)
 		{
 			var generation = NextGeneration(CatalogPath, CatalogFile.Magic, _catalogGeneration);
-			StoreHeader.WriteAtomically(CatalogPath, CatalogFile.Serialize(catalog.Snapshot(), catalog.Types, generation));
+			var snapshot = catalog.Snapshot();
+			StoreHeader.WriteAtomically(CatalogPath, stream => CatalogFile.Serialize(stream, snapshot, catalog.Types, generation));
 			_catalogGeneration = generation;
 		}
 	}

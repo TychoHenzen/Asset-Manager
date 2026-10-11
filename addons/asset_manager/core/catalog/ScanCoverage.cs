@@ -28,12 +28,12 @@ public sealed class ScanCoverage
 		}
 	}
 
-	public bool Covers(string relPath) =>
-		_shallow.Contains(RelPaths.Parent(relPath)) || _recursive.ContainsAncestorOf(relPath);
+	/// True when the walked units speak for the files directly in `folder`.
+	/// Asked once per folder rather than once per record.
+	public bool CoversFilesIn(string folder) =>
+		_shallow.Contains(folder) || _recursive.Contains(folder) || _recursive.ContainsAncestorOf(folder);
 
-	public bool IsUnderFailedFolder(string relPath) => _failed.ContainsAncestorOf(relPath);
-
-	/// Covered, not seen, and not under an unreadable folder.
-	public bool IsGone(string relPath, IReadOnlySet<string> seen) =>
-		Covers(relPath) && !seen.Contains(relPath) && !IsUnderFailedFolder(relPath);
+	/// True when `folder` or a folder above it could not be listed: what is
+	/// indexed under it is unknown, and stays.
+	public bool IsFailedAtOrAbove(string folder) => _failed.Contains(folder) || _failed.ContainsAncestorOf(folder);
 }

@@ -58,14 +58,13 @@ internal static class IndexDbMigration
 		if (rel.Length == 0 || type < 0)
 			return null;
 
-		return new AssetRecord(rel, type)
-		{
-			Size = -1,
-			MTime = -1,
-			DateAdded = ReadLong(entry, "date_added"),
-			AutoTags = tags.Intern(ReadStrings(entry, "tags")),
-			Subtypes = ReadStrings(entry, "subtype"),
-		};
+		var record = Catalog.NewRecord(rel, type);
+		record.Size = -1;
+		record.MTime = -1;
+		record.DateAdded = ReadLong(entry, "date_added");
+		record.AutoTags = tags.Intern(ReadStrings(entry, "tags"));
+		record.Subtypes = ReadStrings(entry, "subtype");
+		return record;
 	}
 
 	private static string ReadString(Godot.Collections.Dictionary entry, string key)

@@ -60,11 +60,20 @@ internal static class StoreHeader
 
 	/// One sequential write to a temp file, then a rename, so a reader on
 	/// another machine never sees half a file and a crash never leaves one.
-	public static void WriteAtomically(string path, byte[] bytes)
+	public static void WriteAtomically(string path, byte[] bytes) =>
+		WriteAtomically(path, stream => stream.Write(bytes));
+
+	/// The same, for a file written straight to disk as it is produced rather
+	/// than built in memory first.
+	public static void WriteAtomically(string path, Action<Stream> write)
 	{
 		Directory.CreateDirectory(Path.GetDirectoryName(path)!);
 		var temp = path + ".tmp";
-		File.WriteAllBytes(temp, bytes);
+		using (var stream = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None, BufferSize))
+			write(stream);
 		File.Move(temp, path, overwrite: true);
 	}
+
+	/// Large sequential transfers keep the round trips to the NAS few.
+	public const int BufferSize = 1 << 20;
 }
