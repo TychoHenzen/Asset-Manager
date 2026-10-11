@@ -42,6 +42,12 @@ public sealed class AssetRecord
 	/// Filter categories a thumbnail renderer detected ("3d", "spatial"...).
 	public string[] Subtypes { get; set; } = [];
 
+	/// SHA-256 of the file's content, or null when it was never read. Only
+	/// files that share a name and size with another are hashed, to tell exact
+	/// copies apart from different files that happen to match. Cleared when
+	/// size or mtime change.
+	public byte[]? Hash { get; set; }
+
 	public bool IsUnder(string relPrefix) =>
 		relPrefix.Length == 0
 		|| (RelPath.Length > relPrefix.Length

@@ -20,10 +20,12 @@ public static class CatalogJson
 		var types = new List<AssetType>();
 		foreach (var entry in doc.RootElement.EnumerateArray())
 		{
+			var extensions = Strings(entry, "extensions").Select(e => e.ToLowerInvariant()).ToList();
 			types.Add(new AssetType
 			{
 				Id = entry.GetProperty("id").GetString() ?? "",
-				Extensions = Strings(entry, "extensions").Select(e => e.ToLowerInvariant()).ToHashSet(),
+				Extensions = extensions.ToHashSet(),
+				ExtensionOrder = extensions,
 				ResourceTypes = Strings(entry, "resource_type").ToHashSet(),
 			});
 		}
@@ -46,6 +48,7 @@ public static class CatalogJson
 			Sort = (SortMode)Int(root, "sort", 0),
 			Page = Math.Max(0, Int(root, "page", 0)),
 			PerPage = Math.Max(1, Int(root, "per_page", 100)),
+			GroupVersions = !root.TryGetProperty("group_versions", out var group) || group.ValueKind != JsonValueKind.False,
 		};
 	}
 

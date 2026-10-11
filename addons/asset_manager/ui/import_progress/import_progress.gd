@@ -17,6 +17,7 @@ signal stop_requested
 const STAGES: Array[Dictionary] = [
 	{"id": "scan", "label": "Scanning packs", "weight": 1.0},
 	{"id": "retry", "label": "Retrying unreadable folders", "weight": 0.05},
+	{"id": "duplicates", "label": "Finding exact copies", "weight": 0.5},
 ]
 
 const STOP_ACTION: StringName = &"stop"

@@ -19,14 +19,19 @@ internal static class StoreHeader
 	}
 
 	/// Throws InvalidDataException on a wrong magic or version.
-	public static long Read(BinaryReader reader, string magic, int version)
+	public static long Read(BinaryReader reader, string magic, int version) =>
+		Read(reader, magic, version, version, out _);
+
+	/// For a format that still reads its older versions: `version` is the one
+	/// found, between `oldest` and `newest`.
+	public static long Read(BinaryReader reader, string magic, int oldest, int newest, out int version)
 	{
 		var found = Encoding.ASCII.GetString(reader.ReadBytes(4));
 		if (found != magic)
 			throw new InvalidDataException($"Expected {magic} header, found '{found}'.");
-		var foundVersion = reader.ReadInt32();
-		if (foundVersion != version)
-			throw new InvalidDataException($"{magic} format version {foundVersion} is not supported (expected {version}).");
+		version = reader.ReadInt32();
+		if (version < oldest || version > newest)
+			throw new InvalidDataException($"{magic} format version {version} is not supported (expected {oldest} to {newest}).");
 		return reader.ReadInt64();
 	}
 

@@ -8,12 +8,14 @@ namespace AssetManager.Core;
 /// catalog.bin: everything a scan produces. Rewritten after a scan that
 /// changed something, never on a tag edit.
 /// Layout after the header: type ids, tag names, then per record: path, type
-/// index, size, mtime, date added, auto tag ids, subtypes. Type ids are stored
-/// by name so a reordered asset_types.gd still loads.
+/// index, size, mtime, date added, auto tag ids, subtypes, content hash (from
+/// version 2: a length, 0 for none, then the bytes). Type ids are stored by
+/// name so a reordered asset_types.gd still loads.
 internal static class CatalogFile
 {
 	public const string Magic = "AMCT";
-	public const int Version = 1;
+	public const int Version = 2;
+	private const int OldestReadable = 1;
 
 	public static byte[] Serialize(CatalogSnapshot snapshot, TypeTable types, long generation)
 	{
@@ -43,6 +45,9 @@ internal static class CatalogFile
 			w.Write(r.Subtypes.Length);
 			foreach (var subtype in r.Subtypes)
 				w.Write(subtype);
+			var hash = r.Hash ?? [];
+			w.Write(hash.Length);
+			w.Write(hash);
 		}
 
 		w.Flush();
@@ -53,7 +58,7 @@ internal static class CatalogFile
 	public static CatalogFileContents Deserialize(byte[] bytes, TypeTable types)
 	{
 		using var r = new BinaryReader(new MemoryStream(bytes), Encoding.UTF8);
-		var generation = StoreHeader.Read(r, Magic, Version);
+		var generation = StoreHeader.Read(r, Magic, OldestReadable, Version, out var version);
 
 		var storedTypes = new int[r.ReadInt32()];
 		for (var i = 0; i < storedTypes.Length; i++)
@@ -76,12 +81,19 @@ internal static class CatalogFile
 				DateAdded = r.ReadInt64(),
 				AutoTags = ReadInts(r),
 				Subtypes = ReadStrings(r),
+				Hash = version >= 2 ? ReadHash(r) : null,
 			};
 			if (type >= 0)
 				records.Add(record);
 		}
 
 		return new CatalogFileContents(generation, records, tagNames);
+	}
+
+	private static byte[]? ReadHash(BinaryReader r)
+	{
+		var length = r.ReadInt32();
+		return length == 0 ? null : r.ReadBytes(length);
 	}
 
 	private static int[] ReadInts(BinaryReader r)

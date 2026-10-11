@@ -25,6 +25,9 @@ var _thumbnails: ThumbnailLoader
 var _progress_dialog: ImportProgressDialog
 var _remove_dialog: ConfirmationDialog
 var _pending_removal: PackedStringArray = []
+## Tags the newest version lookup, so a late answer for an earlier selection
+## is dropped.
+var _versions_request: int = 0
 
 const PROGRESS_DIALOG_SCENE := preload("res://addons/asset_manager/ui/import_progress/import_progress.tscn")
 
@@ -75,6 +78,7 @@ func _ready() -> void:
 	_preview.remove_from_project_pressed.connect(_on_remove_from_project_pressed)
 	_preview.open_external_pressed.connect(_on_open_external_pressed)
 	_preview.open_location_pressed.connect(_on_open_location_pressed)
+	_preview.version_selected.connect(_on_version_selected)
 	_preview.add_tag_requested.connect(_on_add_tag_requested)
 	_preview.remove_tag_requested.connect(_on_remove_tag_requested)
 	_preview.tag_search_changed.connect(_on_tag_input_text_changed)
@@ -410,6 +414,7 @@ func _on_workspace_opened(path: String) -> void:
 	_catalog.ScanProgressed.connect(_on_scan_progressed)
 	_catalog.ScanFinished.connect(_on_scan_finished)
 	_catalog.Changed.connect(_refresh_all_after_index_change)
+	_catalog.VersionsReady.connect(_on_versions_ready)
 
 	_preview.set_catalog(_catalog)
 	_sidebar.set_catalog(_catalog, path)
@@ -439,7 +444,25 @@ func _exit_tree() -> void:
 func _selected_paths() -> Array:
 	return [current_selected_path] if not current_selected_path.is_empty() else []
 
+## A tile stands for every version of its asset; which ones there are comes
+## back from the catalog in the background, and the preview offers them.
 func _on_selection_changed(path: String) -> void:
+	_versions_request += 1
+	_preview.set_versions("", [], [])
+	_show_selected(path)
+	if not path.is_empty():
+		_catalog.Versions(_versions_request, path)
+
+func _on_versions_ready(request_id: int, _path: String, paths: PackedStringArray, sizes: PackedInt64Array) -> void:
+	if request_id == _versions_request:
+		_preview.set_versions(current_selected_path, paths, sizes)
+
+## Another version of the same asset: the grid selection stays, everything
+## that acts on "the selected asset" (send, remove, tags) moves to it.
+func _on_version_selected(path: String) -> void:
+	_show_selected(path)
+
+func _show_selected(path: String) -> void:
 	current_selected_path = path
 
 	var has_selection := not path.is_empty()

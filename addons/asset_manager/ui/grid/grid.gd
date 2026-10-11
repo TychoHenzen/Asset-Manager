@@ -31,6 +31,8 @@ var _total_pages: int = 1
 var _request_id: int = 0
 var _item_by_path: Dictionary = {}
 var _type_by_path: Dictionary = {}
+## How many versions each tile's asset has, 1 for none.
+var _versions_by_path: Dictionary = {}
 ## Paths on this page whose file is already at its project destination.
 var _in_project: Dictionary = {}
 
@@ -75,6 +77,7 @@ func _ready() -> void:
 	_subbar.tile_size_changed.connect(_on_tile_size_changed)
 	_subbar.view_mode_changed.connect(_on_view_mode_changed)
 	_subbar.subtype_changed.connect(_on_subtype_changed)
+	_subbar.group_versions_changed.connect(_on_group_versions_changed)
 	_open_folder_button.pressed.connect(func() -> void:
 		if catalog != null and not catalog.WorkspacePath.is_empty():
 			OS.shell_open(catalog.WorkspacePath)
@@ -144,6 +147,7 @@ func setup(p_catalog: AssetCatalog, p_settings: SettingsManager, p_thumbnails: T
 	_subbar.set_tile_size(settings.get_grid_icon_size())
 	_subbar.set_per_page(settings.get_items_per_page())
 	_subbar.set_view_mode(settings.get_is_grid_view())
+	_subbar.set_group_versions(settings.get_group_versions())
 	_apply_view_mode()
 
 ## Everything the grid filters by, handed in rather than read from the sidebar,
@@ -172,10 +176,12 @@ func refresh() -> void:
 		"sort": _sort_mode,
 		"page": _page,
 		"per_page": settings.get_items_per_page(),
+		"group_versions": settings.get_group_versions(),
 	}))
 
 func _on_query_ready(request_id: int, paths: PackedStringArray, types: PackedStringArray,
-		sizes: PackedInt64Array, mtimes: PackedInt64Array, total: int, page: int, total_pages: int) -> void:
+		sizes: PackedInt64Array, mtimes: PackedInt64Array, total: int, page: int, total_pages: int,
+		version_counts: PackedInt32Array) -> void:
 	if request_id != _request_id:
 		return
 
@@ -183,6 +189,7 @@ func _on_query_ready(request_id: int, paths: PackedStringArray, types: PackedStr
 	_animator.clear()
 	_item_by_path.clear()
 	_type_by_path.clear()
+	_versions_by_path.clear()
 	_in_project.clear()
 
 	_page = page
@@ -193,10 +200,14 @@ func _on_query_ready(request_id: int, paths: PackedStringArray, types: PackedStr
 	# as they arrive.
 	for i in paths.size():
 		var path := paths[i]
-		var idx := _list.add_item(path.get_file(), _type_icon(types[i]))
+		var label := path.get_file()
+		if version_counts[i] > 1:
+			label += " (+%d)" % (version_counts[i] - 1)
+		var idx := _list.add_item(label, _type_icon(types[i]))
 		_list.set_item_metadata(idx, path)
 		_item_by_path[path] = idx
 		_type_by_path[path] = types[i]
+		_versions_by_path[path] = version_counts[i]
 		_mark_presence(idx, path)
 
 	_update_empty_state(total)
@@ -222,15 +233,18 @@ func is_in_project(path: String) -> bool:
 
 func _mark_presence(idx: int, path: String) -> void:
 	var present := AssetExporter.is_in_project(path, _type_by_path[path], catalog.WorkspacePath)
+	var tooltip := path
+	var versions: int = _versions_by_path.get(path, 1)
+	if versions > 1:
+		tooltip += "\n%d versions (formats or exact copies), listed in the preview" % versions
 	if present:
 		_in_project[path] = true
 		_list.set_item_custom_bg_color(idx, _in_project_tint())
-		_list.set_item_tooltip(idx, "%s
-In project: %s" % [path, AssetExporter.project_path(path, _type_by_path[path], catalog.WorkspacePath)])
+		tooltip += "\nIn project: " + AssetExporter.project_path(path, _type_by_path[path], catalog.WorkspacePath)
 	else:
 		_in_project.erase(path)
 		_list.set_item_custom_bg_color(idx, Color(0, 0, 0, 0))
-		_list.set_item_tooltip(idx, path)
+	_list.set_item_tooltip(idx, tooltip)
 
 func _in_project_tint() -> Color:
 	var accent := Color(0.44, 0.73, 0.98)
@@ -367,6 +381,11 @@ func _on_list_gui_input(event: InputEvent) -> void:
 
 func _on_sort_changed(mode: int) -> void:
 	_sort_mode = mode
+	_page = 0
+	refresh()
+
+func _on_group_versions_changed(enabled: bool) -> void:
+	settings.set_group_versions(enabled)
 	_page = 0
 	refresh()
 

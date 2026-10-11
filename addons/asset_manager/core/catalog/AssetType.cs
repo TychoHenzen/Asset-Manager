@@ -11,6 +11,11 @@ public sealed class AssetType
 	/// Lowercase, without the dot. "" stands for files with no extension.
 	public required IReadOnlySet<string> Extensions { get; init; }
 
+	/// The extensions in asset_types.gd's order, which puts the formats Godot
+	/// handles best first. The first version of an asset in this order is the
+	/// one offered by default.
+	public IReadOnlyList<string> ExtensionOrder { get; init; } = [];
+
 	/// Empty means any resource type is accepted.
 	public required IReadOnlySet<string> ResourceTypes { get; init; }
 
@@ -23,4 +28,15 @@ public sealed class AssetType
 
 	public bool MatchesResourceType(string resourceType) =>
 		!NeedsResourceHeader || ResourceTypes.Contains(resourceType);
+
+	/// Lower is preferred; extensions not listed come last.
+	public int ExtensionRank(string extensionLower)
+	{
+		for (var i = 0; i < ExtensionOrder.Count; i++)
+		{
+			if (ExtensionOrder[i] == extensionLower)
+				return i;
+		}
+		return ExtensionOrder.Count;
+	}
 }

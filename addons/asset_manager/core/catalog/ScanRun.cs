@@ -17,6 +17,11 @@ public sealed class ScanRun(Catalog catalog, LibraryScanner scanner, Func<string
 	public TimeSpan ApplyEvery { get; init; } = TimeSpan.FromSeconds(30);
 	public TimeSpan SaveEvery { get; init; } = TimeSpan.FromMinutes(2);
 
+	/// Run after the walk, to find exact copies; none when null.
+	public DuplicateHashing? Hashing { get; init; }
+
+	// Hashing saves from several threads at once.
+	private readonly object _saveGate = new();
 	private readonly List<UnitResult> _pending = [];
 	private readonly ScanCoverage _walked = new();
 	private readonly Stopwatch _sinceApply = Stopwatch.StartNew();
@@ -49,6 +54,8 @@ public sealed class ScanRun(Catalog catalog, LibraryScanner scanner, Func<string
 			cancel.ThrowIfCancellationRequested();
 			Apply();
 			_summary = _summary with { Removed = _summary.Removed + catalog.RemoveUncovered(scanRoot, _walked) };
+
+			Hashing?.Run(progress, () => SaveIfDue(save, changed: true), cancel);
 		}
 		catch (OperationCanceledException)
 		{
@@ -59,7 +66,21 @@ public sealed class ScanRun(Catalog catalog, LibraryScanner scanner, Func<string
 		_unsaved |= _summary.AnythingChanged;
 		if (_unsaved)
 			save();
-		return new ScanReport(_summary with { Total = catalog.Count }, failed, cancelled, scanner.Retries);
+		return new ScanReport(_summary with { Total = catalog.Count }, failed, cancelled, scanner.Retries,
+			Hashing?.Hashed ?? 0, Hashing?.Unreadable ?? 0);
+	}
+
+	private void SaveIfDue(Action save, bool changed)
+	{
+		lock (_saveGate)
+		{
+			_unsaved |= changed;
+			if (!_unsaved || _sinceSave.Elapsed < SaveEvery)
+				return;
+			save();
+			_unsaved = false;
+			_sinceSave.Restart();
+		}
 	}
 
 	private void WalkUnits(string stage, List<string> roots, List<string> failures, IProgress<ScanProgress>? progress, Action save, CancellationToken cancel)
@@ -76,12 +97,7 @@ public sealed class ScanRun(Catalog catalog, LibraryScanner scanner, Func<string
 
 			if (_sinceApply.Elapsed >= ApplyEvery)
 				Apply();
-			if (_unsaved && _sinceSave.Elapsed >= SaveEvery)
-			{
-				save();
-				_unsaved = false;
-				_sinceSave.Restart();
-			}
+			SaveIfDue(save, changed: false);
 		}
 		progress?.Report(new ScanProgress(stage, _filesSeen, "", roots.Count, roots.Count));
 	}

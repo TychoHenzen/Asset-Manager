@@ -17,6 +17,7 @@ internal static class Fixtures
 	{
 		Id = id,
 		Extensions = new HashSet<string>(extensions),
+		ExtensionOrder = extensions,
 		ResourceTypes = new HashSet<string>(resourceTypes ?? []),
 	};
 

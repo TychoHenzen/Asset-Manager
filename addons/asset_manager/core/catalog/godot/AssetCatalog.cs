@@ -28,7 +28,13 @@ public partial class AssetCatalog : RefCounted, ISerializationListener
 	/// every retry; what was indexed under them is kept. `retries` counts
 	/// requests to the library that failed and were tried again.
 	[Signal] public delegate void ScanFinishedEventHandler(int added, int changed, int removed, int total, bool cancelled, string root, double seconds, int retagged, string[] failedFolders, int retries);
-	[Signal] public delegate void QueryReadyEventHandler(int requestId, string[] paths, string[] types, long[] sizes, long[] mtimes, int total, int page, int totalPages);
+	/// `versionCounts[i]` is how many versions (formats, exact copies) the
+	/// asset at `paths[i]` has, 1 for none.
+	[Signal] public delegate void QueryReadyEventHandler(int requestId, string[] paths, string[] types, long[] sizes, long[] mtimes, int total, int page, int totalPages, int[] versionCounts);
+
+	/// `paths` are every version of the asset `path` asked about, preferred
+	/// first, `sizes` theirs; just `path` itself when it has no others.
+	[Signal] public delegate void VersionsReadyEventHandler(int requestId, string path, string[] paths, long[] sizes);
 
 	/// `statsJson` has the shape sidebar._gather_stats returned.
 	[Signal] public delegate void StatsReadyEventHandler(int requestId, string statsJson);
@@ -134,8 +140,9 @@ public partial class AssetCatalog : RefCounted, ISerializationListener
 			var types = items.Select(r => _catalog.Types[r.Type].Id).ToArray();
 			var sizes = items.Select(r => r.Size).ToArray();
 			var mtimes = items.Select(r => r.MTime).ToArray();
+			var versionCounts = result.VersionCounts.ToArray();
 			BackgroundWork.OnMainThread(() => EmitSignal(SignalName.QueryReady,
-				requestId, paths, types, sizes, mtimes, result.Total, result.Page, result.TotalPages));
+				requestId, paths, types, sizes, mtimes, result.Total, result.Page, result.TotalPages, versionCounts));
 		}, "querying");
 	}
 
@@ -172,6 +179,25 @@ public partial class AssetCatalog : RefCounted, ISerializationListener
 	}
 
 	public string[] TagsOf(string absolutePath) => _catalog.TagsOf(Rel(absolutePath));
+
+	/// The file's size as last scanned, 0 when not indexed.
+	public long SizeOf(string absolutePath) => _catalog.Get(Rel(absolutePath))?.Size ?? 0;
+
+	/// Every version of the asset at `absolutePath` (its formats and exact
+	/// copies), preferred first, with their sizes. Answers with VersionsReady:
+	/// the first ask after the catalog changed groups the whole library, about
+	/// a second, too long for the main thread.
+	public void Versions(int requestId, string absolutePath)
+	{
+		var rel = Rel(absolutePath);
+		_work.Run(_ =>
+		{
+			var versions = _catalog.VersionsOf(rel);
+			var paths = versions.Select(v => WorkspacePaths.Absolute(WorkspacePath, v)).ToArray();
+			var sizes = versions.Select(v => _catalog.Get(v)?.Size ?? 0).ToArray();
+			BackgroundWork.OnMainThread(() => EmitSignal(SignalName.VersionsReady, requestId, absolutePath, paths, sizes));
+		}, "finding versions");
+	}
 
 	public string[] KnownTags() => _catalog.KnownTags();
 
@@ -219,7 +245,10 @@ public partial class AssetCatalog : RefCounted, ISerializationListener
 		};
 		var run = new ScanRun(_catalog, scanner,
 			rel => ResourceHeader.TypeOf(Path.Combine(WorkspacePath, rel)),
-			() => DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+			() => DateTimeOffset.UtcNow.ToUnixTimeSeconds())
+		{
+			Hashing = new DuplicateHashing(_catalog, rel => ContentHash.Of(Path.Combine(WorkspacePath, rel)), RetryPolicy.Network),
+		};
 		var report = new ScanReport(new ScanSummary(), [], Cancelled: true, 0);
 		try
 		{
@@ -233,6 +262,8 @@ public partial class AssetCatalog : RefCounted, ISerializationListener
 			var failed = report.FailedFolders.Select(f => WorkspacePaths.Absolute(WorkspacePath, f)).ToArray();
 			var absoluteRoot = WorkspacePaths.Absolute(WorkspacePath, root);
 			var seconds = (DateTime.UtcNow - started).TotalSeconds;
+			if (report.Hashed + report.Unhashed > 0)
+				GD.Print($"AssetManager: read {report.Hashed:N0} files to find exact copies; {report.Unhashed:N0} could not be read and wait for the next scan");
 			BackgroundWork.OnMainThread(() =>
 			{
 				_scanCancel?.Dispose();

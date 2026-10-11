@@ -26,6 +26,12 @@ public sealed class Catalog
 	private string[]? _knownTags;
 	private int _tagsVersion;
 
+	// Grouping walks every record, so it is built once per version of the
+	// record set and of the content hashes, like the sort orders.
+	private VersionIndex? _versions;
+	private (int Records, int Hashes) _versionsBuiltFor = (-1, -1);
+	private int _hashesVersion;
+
 	public Catalog(TypeTable types) => Types = types;
 
 	public TypeTable Types { get; }
@@ -79,6 +85,7 @@ public sealed class Catalog
 			{
 				change.Record.Size = change.File.Size;
 				change.Record.MTime = change.File.MTime;
+				change.Record.Hash = null;
 			}
 
 			foreach (var retag in plan.Retags)
@@ -218,6 +225,7 @@ public sealed class Catalog
 	public QueryPage Query(CatalogQuery query)
 	{
 		var order = OrderFor(query.SearchTermLower.Length > 0 ? SortMode.Name : query.Sort);
+		var versions = query.GroupVersions ? Versions() : VersionIndex.Empty;
 		var collector = new PageCollector(Math.Max(0, query.Page), query.PerPage);
 
 		int[] tagIds;
@@ -232,7 +240,7 @@ public sealed class Catalog
 		if (resolved)
 		{
 			var matcher = new CatalogMatcher(query, tagIds, tagNames);
-			foreach (var record in InDisplayOrder(matcher, order))
+			foreach (var record in versions.OnePerGroup(InDisplayOrder(matcher, order), matcher.Matches))
 				collector.Take(record);
 		}
 
@@ -241,7 +249,60 @@ public sealed class Catalog
 			return Query(query.WithPage(collector.LastPage));
 
 		var totalPages = collector.LastPage + 1;
-		return new QueryPage(collector.Items, collector.Total, Math.Clamp(query.Page, 0, totalPages - 1), totalPages);
+		var counts = collector.Items.Select(versions.CountOf).ToArray();
+		return new QueryPage(collector.Items, collector.Total, Math.Clamp(query.Page, 0, totalPages - 1), totalPages, counts);
+	}
+
+	/// Which records are versions of which. Built outside the lock and kept
+	/// until the record set or a hash changes.
+	public VersionIndex Versions()
+	{
+		AssetRecord[] records;
+		(int, int) builtFor;
+		lock (_gate)
+		{
+			builtFor = (_recordsVersion, _hashesVersion);
+			if (_versions != null && _versionsBuiltFor == builtFor)
+				return _versions;
+			records = _byPath.Values.ToArray();
+		}
+
+		var versions = VersionIndex.Build(records, Types);
+		lock (_gate)
+		{
+			if (builtFor == (_recordsVersion, _hashesVersion))
+			{
+				_versions = versions;
+				_versionsBuiltFor = builtFor;
+			}
+		}
+		return versions;
+	}
+
+	/// The paths of every version of `relPath`'s asset, preferred first, or
+	/// just `relPath` when it has none. Empty for a path not indexed.
+	public string[] VersionsOf(string relPath)
+	{
+		var record = Get(relPath);
+		if (record == null)
+			return [];
+		var group = Versions().GroupOf(record);
+		return group == null ? [relPath] : group.Members.Select(r => r.RelPath).ToArray();
+	}
+
+	/// Stores a hash read from a file of `size` and `mtime`. Ignored when the
+	/// record changed or went away since: the hash would describe old content.
+	public bool SetHash(AssetRecord record, long size, long mtime, byte[] hash)
+	{
+		lock (_gate)
+		{
+			if (!_byPath.TryGetValue(record.RelPath, out var current) || current != record
+				|| record.Size != size || record.MTime != mtime)
+				return false;
+			record.Hash = hash;
+			_hashesVersion++;
+			return true;
+		}
 	}
 
 	public CatalogStats Stats(string prefix)

@@ -5,7 +5,7 @@ namespace AssetManager.Core;
 
 /// Everything the grid filters by. Same fields the GDScript grid handed to
 /// _matching_assets, with the folder prefix workspace-relative.
-public sealed class CatalogQuery
+public sealed record CatalogQuery
 {
 	public string Prefix { get; init; } = "";
 	public IReadOnlyList<string> Tags { get; init; } = [];
@@ -18,21 +18,15 @@ public sealed class CatalogQuery
 	public int Page { get; init; }
 	public int PerPage { get; init; } = 100;
 
+	/// One result per asset: its other versions (formats, exact copies) are
+	/// folded into it.
+	public bool GroupVersions { get; init; } = true;
+
 	public bool IsExactSearch =>
 		Search.Length >= 2 && Search.StartsWith('"') && Search.EndsWith('"');
 
 	public string SearchTermLower =>
 		(IsExactSearch ? Search[1..^1] : Search).ToLowerInvariant();
 
-	public CatalogQuery WithPage(int page) => new()
-	{
-		Prefix = Prefix,
-		Tags = Tags,
-		Extensions = Extensions,
-		Subtype = Subtype,
-		Search = Search,
-		Sort = Sort,
-		Page = page,
-		PerPage = PerPage,
-	};
+	public CatalogQuery WithPage(int page) => this with { Page = page };
 }

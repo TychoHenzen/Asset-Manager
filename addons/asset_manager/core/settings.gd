@@ -20,10 +20,12 @@ const KEY_VENDORS: String = "vendors"
 const KEY_VENDOR_BY_TYPE: String = "vendor_by_type"
 const KEY_SIDEBAR_WIDTH: String = "sidebar_width"
 const KEY_PREVIEW_WIDTH: String = "preview_width"
+const KEY_GROUP_VERSIONS: String = "group_versions"
 
 const DEFAULT_ITEMS_PER_PAGE: int = 100
 const DEFAULT_GRID_ICON_SIZE: int = 40
 const DEFAULT_IS_GRID_VIEW: bool = true
+const DEFAULT_GROUP_VERSIONS: bool = true
 const DEFAULT_AUDIO_VOLUME: float = 25.0
 const DEFAULT_LIGHT_MODE_IDX: int = 0
 const DEFAULT_GRID_VISIBLE: bool = true
@@ -53,6 +55,13 @@ func get_is_grid_view() -> bool:
 
 func set_is_grid_view(value: bool) -> void:
 	_set_pref(KEY_IS_GRID_VIEW, value)
+
+## One tile per asset, its other formats and exact copies folded into it.
+func get_group_versions() -> bool:
+	return AssetManagerConfig.get_value(SECTION, KEY_GROUP_VERSIONS, DEFAULT_GROUP_VERSIONS)
+
+func set_group_versions(value: bool) -> void:
+	_set_pref(KEY_GROUP_VERSIONS, value)
 
 func get_audio_volume() -> float:
 	return AssetManagerConfig.get_value(SECTION, KEY_AUDIO_VOLUME, DEFAULT_AUDIO_VOLUME)
