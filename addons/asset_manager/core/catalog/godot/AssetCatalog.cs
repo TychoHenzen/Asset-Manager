@@ -247,7 +247,11 @@ public partial class AssetCatalog : RefCounted, ISerializationListener
 			rel => ResourceHeader.TypeOf(Path.Combine(WorkspacePath, rel)),
 			() => DateTimeOffset.UtcNow.ToUnixTimeSeconds())
 		{
-			Hashing = new DuplicateHashing(_catalog, rel => ContentHash.Of(Path.Combine(WorkspacePath, rel)), RetryPolicy.Network),
+			// Only after a full scan: the first pass over this library takes
+			// hours, and adding one pack should not start it.
+			Hashing = root.Length == 0
+				? new DuplicateHashing(_catalog, rel => ContentHash.Of(Path.Combine(WorkspacePath, rel)), RetryPolicy.Network)
+				: null,
 		};
 		var report = new ScanReport(new ScanSummary(), [], Cancelled: true, 0);
 		try

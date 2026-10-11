@@ -48,6 +48,10 @@ public sealed class AssetRecord
 	/// size or mtime change.
 	public byte[]? Hash { get; set; }
 
+	/// VersionKey.For this record, kept once worked out: path and type never
+	/// change, and grouping 1.7M records reworks every key otherwise.
+	internal string? VersionKey { get; set; }
+
 	public bool IsUnder(string relPrefix) =>
 		relPrefix.Length == 0
 		|| (RelPath.Length > relPrefix.Length

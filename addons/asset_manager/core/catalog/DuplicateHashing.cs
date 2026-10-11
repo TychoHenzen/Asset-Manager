@@ -9,7 +9,8 @@ namespace AssetManager.Core;
 /// Reads the files that might be exact copies of each other, to tell. Only
 /// records sharing type, name and size with another are candidates, and each
 /// is read once: the hash stays until the file changes. Opening a file on the
-/// NAS costs ~55 ms, so a few are read at once.
+/// NAS costs ~55 ms whatever else is going on: 4, 8, 16 and 32 reads at once
+/// all measured 15-18 files/s, so a few at once is enough.
 public sealed class DuplicateHashing(Catalog catalog, Func<string, byte[]> hashFile, RetryPolicy retry)
 {
 	private int _hashed;
@@ -43,12 +44,19 @@ public sealed class DuplicateHashing(Catalog catalog, Func<string, byte[]> hashF
 		});
 	}
 
-	/// Records sharing type, name and size with another, without a hash yet.
+	/// Records sharing type, name and size with another, without a hash yet,
+	/// most likely copies first. Measured on the library: of candidate pairs
+	/// that also share an mtime 94% were copies, against 5% overall, and a
+	/// big group (one icon sheet in 90 packs) folds the most tiles per read.
+	/// The full first pass takes hours at ~55 ms per file opened on the NAS,
+	/// so the order decides how much a stopped pass has already found.
 	public static List<AssetRecord> CandidatesIn(IEnumerable<AssetRecord> records) =>
 		records
 			.GroupBy(r => (r.Type, r.FileNameLower, r.Size))
 			.Where(g => g.Skip(1).Any())
-			.SelectMany(g => g)
+			.OrderByDescending(g => g.GroupBy(r => r.MTime).Any(m => m.Skip(1).Any()))
+			.ThenByDescending(g => g.Count())
+			.SelectMany(g => g.OrderBy(r => r.MTime))
 			.Where(r => r.Hash == null)
 			.ToList();
 }

@@ -52,7 +52,8 @@ public sealed class VersionIndex
 		for (var i = 0; i < records.Count; i++)
 		{
 			var record = records[i];
-			Join(sets, firstByKey, i, VersionKey.For(record.RelPath, types[record.Type]));
+			record.VersionKey ??= VersionKey.For(record.RelPath, types[record.Type]);
+			Join(sets, firstByKey, i, record.VersionKey);
 			if (record.Hash != null)
 				Join(sets, firstByKey, i, CopyKey(record));
 		}
