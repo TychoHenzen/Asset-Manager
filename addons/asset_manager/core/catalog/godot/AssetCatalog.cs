@@ -51,6 +51,7 @@ public partial class AssetCatalog : RefCounted, ISerializationListener
 	private CatalogStore _store = new("");
 	private CancellationTokenSource? _scanCancel;
 	private int _subtypeSaveQueued;
+	private int _recordsVersionShown = -1;
 
 	// Strings and bools survive a C# assembly reload; the catalog itself does
 	// not. These are what OnAfterDeserialize needs to rebuild it.
@@ -281,10 +282,15 @@ public partial class AssetCatalog : RefCounted, ISerializationListener
 
 	/// Stop does not cancel a save, only shutting down does: a stopped scan
 	/// keeps what it walked.
+	/// Views refresh only when files came, went or changed: the copy-hashing
+	/// stage saves every 2 minutes for hours, and redrawing the page under the
+	/// user each time would show nothing new on it.
 	private void SaveDuringScan()
 	{
 		RetryPolicy.Network.Run(() => _store.SaveCatalog(_catalog), _work.Token);
-		BackgroundWork.OnMainThread(() => EmitSignal(SignalName.Changed));
+		var version = _catalog.RecordsVersion;
+		if (Interlocked.Exchange(ref _recordsVersionShown, version) != version)
+			BackgroundWork.OnMainThread(() => EmitSignal(SignalName.Changed));
 	}
 
 	private void ReportScan(ScanProgress p)

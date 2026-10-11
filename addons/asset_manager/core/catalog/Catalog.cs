@@ -21,10 +21,10 @@ public sealed class Catalog
 	private readonly SortOrders _orders = new();
 	private int _recordsVersion;
 
-	// The tag editor asks on every keystroke; walking 300k records each time
-	// is too slow for the main thread.
+	// The tag editor asks on every keystroke, on the main thread, so the tags
+	// in use are counted as records change rather than found by a walk.
+	private readonly TagUseCounts _tagUses = new();
 	private string[]? _knownTags;
-	private int _tagsVersion;
 
 	// Grouping walks every record, so it is built once per version of the
 	// record set and of the content hashes, like the sort orders.
@@ -41,6 +41,13 @@ public sealed class Catalog
 		get { lock (_gate) return _byPath.Count; }
 	}
 
+	/// Goes up whenever records are added, changed, retagged or removed; not
+	/// for hashes or subtypes.
+	public int RecordsVersion
+	{
+		get { lock (_gate) return _recordsVersion; }
+	}
+
 	/// Replaces the whole catalog. Tag ids in `records` index into `tagNames`.
 	public void Load(IEnumerable<AssetRecord> records, IReadOnlyList<string> tagNames)
 	{
@@ -50,8 +57,12 @@ public sealed class Catalog
 			_tags.Clear();
 			foreach (var name in tagNames)
 				_tags.Intern(name);
+			_tagUses.Clear();
 			foreach (var record in records)
+			{
 				_byPath[record.RelPath] = record;
+				_tagUses.Add(record.Tags);
+			}
 			Invalidate();
 		}
 	}
@@ -89,24 +100,30 @@ public sealed class Catalog
 			}
 
 			foreach (var retag in plan.Retags)
-				retag.Record.AutoTags = retag.AutoTags.Select(_tags.Intern).ToArray();
+				ChangeTags(retag.Record, r => r.AutoTags = retag.AutoTags.Select(_tags.Intern).ToArray());
 
 			foreach (var add in plan.Additions)
 			{
-				_byPath[add.File.RelPath] = new AssetRecord(add.File.RelPath, add.TypeIndex)
+				var record = new AssetRecord(add.File.RelPath, add.TypeIndex)
 				{
 					Size = add.File.Size,
 					MTime = add.File.MTime,
 					DateAdded = now,
 					AutoTags = add.AutoTags.Select(_tags.Intern).ToArray(),
 				};
+				_byPath[add.File.RelPath] = record;
+				_tagUses.Add(record.Tags);
 			}
 
-			foreach (var path in removed)
-				_byPath.Remove(path);
+			RemoveLocked(removed);
 
-			Invalidate();
-			return new ScanSummary(plan.Additions.Count, plan.Changes.Count, removed.Count, _byPath.Count, plan.Retags.Count);
+			var summary = new ScanSummary(plan.Additions.Count, plan.Changes.Count, removed.Count, _byPath.Count, plan.Retags.Count);
+			// A rescan applies a batch every 30 s, nearly all of them changing
+			// nothing; rebuilding sort orders, groups and the tag list for those
+			// would cost the next query and the next tag keystroke for nothing.
+			if (summary.AnythingChanged)
+				Invalidate();
+			return summary;
 		}
 	}
 
@@ -120,11 +137,27 @@ public sealed class Catalog
 			return 0;
 		lock (_gate)
 		{
-			foreach (var path in removed)
-				_byPath.Remove(path);
+			RemoveLocked(removed);
 			Invalidate();
 		}
 		return removed.Count;
+	}
+
+	private void RemoveLocked(List<string> paths)
+	{
+		foreach (var path in paths)
+		{
+			if (_byPath.Remove(path, out var record))
+				_tagUses.Remove(record.Tags);
+		}
+	}
+
+	/// Every tag change goes through here, so the use counts stay right.
+	private void ChangeTags(AssetRecord record, Action<AssetRecord> change)
+	{
+		_tagUses.Remove(record.Tags);
+		change(record);
+		_tagUses.Add(record.Tags);
 	}
 
 	private List<string> PathsWhere(Func<AssetRecord, bool> predicate) =>
@@ -149,7 +182,7 @@ public sealed class Catalog
 		{
 			if (!_byPath.TryGetValue(relPath, out var record))
 				return false;
-			record.UserTags = tags.Select(_tags.Intern).Distinct().ToArray();
+			ChangeTags(record, r => r.UserTags = tags.Select(_tags.Intern).Distinct().ToArray());
 			TagsChanged();
 			return true;
 		}
@@ -174,7 +207,7 @@ public sealed class Catalog
 			foreach (var (path, tags) in overrides)
 			{
 				if (_byPath.TryGetValue(path, out var record))
-					record.UserTags = tags.Select(_tags.Intern).Distinct().ToArray();
+					ChangeTags(record, r => r.UserTags = tags.Select(_tags.Intern).Distinct().ToArray());
 			}
 			TagsChanged();
 		}
@@ -192,32 +225,12 @@ public sealed class Catalog
 		}
 	}
 
-	/// Every tag some asset currently carries, sorted.
+	/// Every tag some asset currently carries, sorted. Built from the use
+	/// counts, a few milliseconds for the 14k tags of the library.
 	public string[] KnownTags()
 	{
-		AssetRecord[] records;
-		string[] names;
-		int version;
 		lock (_gate)
-		{
-			if (_knownTags != null)
-				return _knownTags;
-			records = _byPath.Values.ToArray();
-			names = _tags.Names.ToArray();
-			version = _tagsVersion;
-		}
-
-		var used = new HashSet<int>();
-		foreach (var record in records)
-			used.UnionWith(record.Tags);
-		var known = used.Select(id => names[id]).OrderBy(t => t, StringComparer.Ordinal).ToArray();
-
-		lock (_gate)
-		{
-			if (version == _tagsVersion)
-				_knownTags = known;
-		}
-		return known;
+			return _knownTags ??= _tagUses.Used().Select(id => _tags[id]).OrderBy(t => t, StringComparer.Ordinal).ToArray();
 	}
 
 	/// Runs outside the lock. A record removed meanwhile can still appear in
@@ -369,9 +382,5 @@ public sealed class Catalog
 		TagsChanged();
 	}
 
-	private void TagsChanged()
-	{
-		_tagsVersion++;
-		_knownTags = null;
-	}
+	private void TagsChanged() => _knownTags = null;
 }

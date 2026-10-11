@@ -239,6 +239,19 @@ public class VersionTests
 		Assert.Equal(4, contents.Generation);
 	}
 
+	[Fact]
+	public void KnownTags_FollowScansThatAddRetagAndRemove()
+	{
+		var catalog = Fixtures.CatalogWith(Fixtures.File("images/craftpix/forest/a.png"), Fixtures.File("images/kenney/ui/b.png"));
+		Assert.Equal(["craftpix", "forest", "kenney", "ui"], catalog.KnownTags());
+
+		catalog.ApplyFiles("images/craftpix", [], 2, _ => "");
+		Assert.Equal(["kenney", "ui"], catalog.KnownTags());
+
+		catalog.ApplyFiles("images/kenney", [Fixtures.File("images/kenney/ui/b.png")], 3, _ => "", "images/kenney");
+		Assert.Equal(["images", "kenney", "ui"], catalog.KnownTags());
+	}
+
 	private static void SetHash(Catalog catalog, string relPath, byte[] hash)
 	{
 		var record = catalog.Get(relPath)!;
