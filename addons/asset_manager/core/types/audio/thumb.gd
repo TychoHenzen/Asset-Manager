@@ -3,46 +3,29 @@ extends RefCounted
 
 ## Thumbnail renderer for sounds and music: the waveform, painted into a square.
 ## Cover art wins when present, the waveform is the fallback.
-## Main thread only. OGG/MP3 go through AudioStreamPlayback (audio server),
-## and the painter builds an ImageTexture (rendering server).
+## None of it needs a viewport or a server: reading the file (slow on a
+## network share), decoding it, folding peaks and painting all happen in
+## prepare() on a worker. render_prepared only hands the result over.
 
 const WAVE_COLOR: Color = Color(0.45, 0.78, 1.0)
 const BG_COLOR: Color = Color(0.12, 0.13, 0.16, 1.0)
 
-static func work_kind() -> int:
-	return ThumbnailStage.WORK_VIEWPORT
-
-static func prepare(_path: String) -> Variant:
-	return null
-
-static func render_prepared(_prepared: Variant, _viewport: ThumbnailViewport, path: String) -> Image:
-	var art := _cover_art(path)
-	if art != null:
+## Worker thread. The finished thumbnail, or null when the file would not read.
+static func prepare(path: String) -> Variant:
+	var art := CoverArtExtractor.extract_image(path)
+	if art != null and not art.is_empty():
 		return art
 
 	var stream := _load_stream(path)
 	if stream == null:
 		return null
-
-	var generator := WaveformGenerator.new()
-	var peaks: Array[Vector2] = await generator.generate_peaks_async(stream, ThumbnailCache.THUMB_SIZE)
+	var peaks := WaveformGenerator.peaks_blocking(stream, ThumbnailSizes.THUMB_SIZE)
 	if peaks.is_empty():
 		return null
+	return _paint(peaks, ThumbnailSizes.THUMB_SIZE)
 
-	return _paint(peaks, ThumbnailCache.THUMB_SIZE)
-
-## Embedded ID3 artwork, MP3 only in practice. The extractor hands back a
-## Texture2D for the preview, but the cache stores Images.
-static func _cover_art(path: String) -> Image:
-	var texture := CoverArtExtractor.extract(path)
-	if texture == null:
-		return null
-
-	var image := texture.get_image()
-	if image == null or image.is_empty():
-		return null
-
-	return image
+static func render_prepared(prepared: Variant, _viewport: ThumbnailViewport, _path: String) -> Image:
+	return prepared as Image
 
 ## Same loading as the audio preview. These files live outside res://, no
 ## imported resource to ask for.

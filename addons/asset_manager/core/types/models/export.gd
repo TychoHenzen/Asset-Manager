@@ -24,6 +24,8 @@ static func export_asset(source_path: String, dest_path: String, _bucket: String
 		for dep_source_path in dependencies:
 			var dep_dest_path := _mirror_relative_path(source_path, dep_source_path, dest_path)
 			AssetExporter.copy_one_file(dep_source_path, dep_dest_path, result)
+	elif ext == "fbx":
+		FbxExport.export_textures(source_path, dest_path, result)
 
 	return result
 

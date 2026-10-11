@@ -11,16 +11,13 @@ const TILE_MARGIN: float = 0.9
 
 const SHEET_SCENE := preload("res://addons/asset_manager/ui/preview_panel/types/themes/themes.tscn")
 
-static func work_kind() -> int:
-	return ThumbnailStage.WORK_VIEWPORT
-
 static func prepare(_path: String) -> Variant:
 	return null
 
 static func render_prepared(_prepared: Variant, viewport: ThumbnailViewport, path: String) -> Image:
 	var preview: Control = SHEET_SCENE.instantiate()
 	preview.anchors_preset = Control.PRESET_TOP_LEFT
-	preview.size = Vector2(ThumbnailCache.THUMB_SIZE, ThumbnailCache.THUMB_SIZE)
+	preview.size = Vector2(ThumbnailSizes.THUMB_SIZE, ThumbnailSizes.THUMB_SIZE)
 
 	preview.position = -preview.size * 0.5
 
@@ -34,4 +31,4 @@ static func render_prepared(_prepared: Variant, viewport: ThumbnailViewport, pat
 	preview.center_sheet()
 	viewport.host().remove_child(holder)
 
-	return await viewport.capture_2d(holder, ThumbnailCache.THUMB_SIZE)
+	return await viewport.capture_2d(holder, ThumbnailSizes.THUMB_SIZE)

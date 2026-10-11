@@ -7,7 +7,7 @@ signal remove_tag_requested(tag_text: String)
 
 signal search_text_changed
 
-var database: AssetDatabase
+var catalog: AssetCatalog
 
 var _last_shared_tags: Array[String] = []
 
@@ -122,7 +122,7 @@ func refresh_ui(selected_paths: Array) -> void:
 	for child in _available_tags_container.get_children():
 		child.queue_free()
 
-	if database == null:
+	if catalog == null:
 		_update_display_row([])
 		return
 
@@ -157,7 +157,7 @@ func refresh_ui(selected_paths: Array) -> void:
 	var search_text := _tag_input_field.text.strip_edges().to_lower().replace(" ", "_")
 	var available_tags: Array[String] = []
 
-	for tag in database.get_all_known_tags():
+	for tag in catalog.KnownTags():
 		if available_tags.size() >= 3:
 			break
 		if not shared_tags.has(tag):
@@ -244,21 +244,26 @@ func apply_tag_change(selected_paths: Array, tag_text: String, add: bool) -> voi
 		return
 
 	for path in selected_paths:
-		var tags := database.get_tags_for_path(path)
+		var tags := _tags_of(path)
 		if add and not tags.has(clean_tag):
 			tags.append(clean_tag)
-			database.update_tags(path, tags)
+			catalog.SetTags(path, PackedStringArray(tags))
 		elif not add and tags.has(clean_tag):
 			tags.erase(clean_tag)
-			database.update_tags(path, tags)
+			catalog.SetTags(path, PackedStringArray(tags))
 
 	refresh_ui(selected_paths)
 
+func _tags_of(path: String) -> Array[String]:
+	var tags: Array[String] = []
+	tags.assign(catalog.TagsOf(path))
+	return tags
+
 func _get_shared_tags(selected_paths: Array) -> Array[String]:
-	var shared_tags := database.get_tags_for_path(selected_paths[0])
+	var shared_tags := _tags_of(selected_paths[0])
 
 	for i in range(1, selected_paths.size()):
-		var current_tags := database.get_tags_for_path(selected_paths[i])
+		var current_tags := _tags_of(selected_paths[i])
 		var intersection: Array[String] = []
 		for tag in shared_tags:
 			if current_tags.has(tag):

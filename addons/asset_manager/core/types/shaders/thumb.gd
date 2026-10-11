@@ -30,9 +30,6 @@ const PARTICLE_WARMUP: float = 1.0
 const PARTICLE_AMOUNT: int = 64
 const PARTICLE_LIFETIME: float = 2.0
 
-static func work_kind() -> int:
-	return ThumbnailStage.WORK_VIEWPORT
-
 static func prepare(_path: String) -> Variant:
 	return null
 
@@ -87,7 +84,7 @@ static func render_prepared(_prepared: Variant, viewport: ThumbnailViewport, pat
 		Shader.MODE_PARTICLES:
 			return await viewport.capture(_particles_subject(material))
 		Shader.MODE_CANVAS_ITEM:
-			return await viewport.capture_2d(_canvas_subject(material), ThumbnailCache.THUMB_SIZE)
+			return await viewport.capture_2d(_canvas_subject(material), ThumbnailSizes.THUMB_SIZE)
 		Shader.MODE_SKY:
 			return await viewport.capture_sky(material)
 		Shader.MODE_FOG:

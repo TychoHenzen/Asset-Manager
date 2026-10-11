@@ -9,9 +9,6 @@ extends RefCounted
 ## Theora decodes on its own schedule; poll until a frame actually lands.
 const MAX_WAIT_FRAMES: int = 60
 
-static func work_kind() -> int:
-	return ThumbnailStage.WORK_VIEWPORT
-
 static func prepare(_path: String) -> Variant:
 	return null
 

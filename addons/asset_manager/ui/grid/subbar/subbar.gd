@@ -8,6 +8,7 @@ signal per_page_changed(count: int)
 signal tile_size_changed(size: int)
 signal view_mode_changed(is_grid: bool)
 signal subtype_changed(subtype: String)
+signal group_versions_changed(enabled: bool)
 
 enum Sort { NAME, RECENT, SIZE }
 
@@ -30,6 +31,8 @@ const BASE_SLIDER_WIDTH: int = 96
 @onready var _view_button: Button = $ViewButton
 
 var _is_grid: bool = true
+## On: one tile per asset, its other formats and exact copies folded in.
+var _group_button: Button
 
 func _ready() -> void:
 	if EditorGuard.is_scene_tab(self):
@@ -65,6 +68,16 @@ func _ready() -> void:
 	)
 	_filter_slot.visible = false
 
+	# A toggle, unlike the view button: grouped or not is a state the user
+	# turns on and off, and the pressed look says which.
+	_group_button = Button.new()
+	_group_button.toggle_mode = true
+	_group_button.flat = true
+	_group_button.text = "Versions"
+	_group_button.tooltip_text = "Group versions: one tile per asset, with its other formats and exact copies in the preview's Version list"
+	_group_button.toggled.connect(func(on: bool) -> void: group_versions_changed.emit(on))
+	_filter_slot.add_sibling(_group_button)
+
 	_apply_icons()
 
 ## Only types that declare subtypes get the dropdown, everything else has one
@@ -94,6 +107,9 @@ func _apply_icons() -> void:
 	_set_icon(_next_button, "Forward")
 	_set_icon(_sort_option, "Sort")
 	_set_icon(_filter_slot, "AnimationFilter")
+	var group_icon := IconHelper.get_icon("Duplicate")
+	if group_icon != null:
+		_group_button.icon = group_icon
 
 ## The pager arrows lose their text; the sort dropdown keeps its label and just
 ## gains an icon beside it.
@@ -117,6 +133,9 @@ func set_page(current: int, total: int) -> void:
 	_page_label.text = "%d / %d" % [current + 1, total]
 	_prev_button.disabled = current <= 0
 	_next_button.disabled = current >= total - 1
+
+func set_group_versions(enabled: bool) -> void:
+	_group_button.set_pressed_no_signal(enabled)
 
 func set_tile_size(size: int) -> void:
 	_size_slider.set_value_no_signal(size)
