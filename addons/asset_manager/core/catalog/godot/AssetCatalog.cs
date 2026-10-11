@@ -24,14 +24,17 @@ public partial class AssetCatalog : RefCounted, ISerializationListener
 	[Signal] public delegate void OpenedEventHandler(int count, bool needsScan);
 	[Signal] public delegate void ScanProgressedEventHandler(string stage, string label, int current, int total);
 	/// `retagged`: unchanged files whose folder tags changed (a vendor marker was
-	/// added or removed above them).
-	[Signal] public delegate void ScanFinishedEventHandler(int added, int changed, int removed, int total, bool cancelled, string root, double seconds, int retagged);
+	/// added or removed above them). `failedFolders` stayed unreadable through
+	/// every retry; what was indexed under them is kept. `retries` counts
+	/// requests to the library that failed and were tried again.
+	[Signal] public delegate void ScanFinishedEventHandler(int added, int changed, int removed, int total, bool cancelled, string root, double seconds, int retagged, string[] failedFolders, int retries);
 	[Signal] public delegate void QueryReadyEventHandler(int requestId, string[] paths, string[] types, long[] sizes, long[] mtimes, int total, int page, int totalPages);
 
 	/// `statsJson` has the shape sidebar._gather_stats returned.
 	[Signal] public delegate void StatsReadyEventHandler(int requestId, string statsJson);
 
-	/// The catalog changed under the UI (a reload from disk); refresh views.
+	/// The catalog changed under the UI (a reload from disk, or a long scan
+	/// saving what it has so far); refresh views.
 	[Signal] public delegate void ChangedEventHandler();
 
 	private static readonly TimeSpan ProgressInterval = TimeSpan.FromMilliseconds(150);
@@ -82,16 +85,16 @@ public partial class AssetCatalog : RefCounted, ISerializationListener
 		_scanning = false;
 		Setup(WorkspacePath, _typesJson);
 		if (interrupted)
-			BackgroundWork.OnMainThread(() => EmitSignal(SignalName.ScanFinished, 0, 0, 0, 0, true, WorkspacePath, 0.0, 0));
+			BackgroundWork.OnMainThread(() => EmitSignal(SignalName.ScanFinished, 0, 0, 0, 0, true, WorkspacePath, 0.0, 0, Array.Empty<string>(), 0));
 		Open();
 	}
 
 	/// Loads catalog.bin, or migrates an old index.db. Emits Opened.
 	public void Open()
 	{
-		_work.Run(_ =>
+		_work.Run(token =>
 		{
-			var loaded = _store.TryLoad(_catalog);
+			var loaded = RetryPolicy.Network.Run(() => _store.TryLoad(_catalog), token);
 			if (!loaded)
 				IndexDbMigration.TryMigrate(WorkspacePath, _catalog);
 			var count = _catalog.Count;
@@ -152,11 +155,11 @@ public partial class AssetCatalog : RefCounted, ISerializationListener
 	{
 		if (_scanning)
 			return;
-		_work.Run(_ =>
+		_work.Run(token =>
 		{
 			if (!_store.IsStale())
 				return;
-			_store.TryLoad(_catalog);
+			RetryPolicy.Network.Run(() => _store.TryLoad(_catalog), token);
 			BackgroundWork.OnMainThread(() => EmitSignal(SignalName.Changed));
 		}, "checking for changes");
 	}
@@ -181,7 +184,7 @@ public partial class AssetCatalog : RefCounted, ISerializationListener
 			GD.PushError("AssetManager: SetTags called for a path that is not indexed: ", absolutePath);
 			return;
 		}
-		_work.Run(_ => _store.SaveTags(_catalog, rel), "saving tags");
+		_work.Run(token => RetryPolicy.Network.Run(() => _store.SaveTags(_catalog, rel), token), "saving tags");
 	}
 
 	/// `subtypes[i]` is a comma-separated list for `paths[i]`. They arrive a
@@ -199,7 +202,7 @@ public partial class AssetCatalog : RefCounted, ISerializationListener
 		{
 			token.WaitHandle.WaitOne(SubtypeSaveDelay);
 			Interlocked.Exchange(ref _subtypeSaveQueued, 0);
-			_store.SaveCatalog(_catalog);
+			RetryPolicy.Network.Run(() => _store.SaveCatalog(_catalog), token);
 		}, "saving subtypes");
 	}
 
@@ -209,27 +212,25 @@ public partial class AssetCatalog : RefCounted, ISerializationListener
 	private void RunScan(string root, CancellationToken token)
 	{
 		var started = DateTime.UtcNow;
-		var progress = new ThrottledProgress(ProgressInterval, p =>
-			Report("scan", p.CurrentFolder.Length > 0 ? $"{p.FilesSeen:N0} files - {p.CurrentFolder}" : $"{p.FilesSeen:N0} files", p.FilesSeen, 0));
-		var summary = new ScanSummary();
-		var cancelled = false;
+		var progress = new ThrottledProgress(ProgressInterval, ReportScan);
+		var scanner = new LibraryScanner(new FileSystemLister(WorkspacePath), RetryPolicy.Network)
+		{
+			Retrying = (folder, attempt, error) => GD.Print($"AssetManager: retrying {folder} (attempt {attempt}): {error.Message}"),
+		};
+		var run = new ScanRun(_catalog, scanner,
+			rel => ResourceHeader.TypeOf(Path.Combine(WorkspacePath, rel)),
+			() => DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+		var report = new ScanReport(new ScanSummary(), [], Cancelled: true, 0);
 		try
 		{
-			var walk = LibraryScanner.Walk(WorkspacePath, root, _catalog.Types, progress, token);
-			Report("database", "Updating index", 0, 1);
-			summary = _catalog.ApplyScan(root, walk, DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-				rel => ResourceHeader.TypeOf(Path.Combine(WorkspacePath, rel)));
-			if (summary.AnythingChanged || !File.Exists(_store.CatalogPath))
-				_store.SaveCatalog(_catalog);
-			Report("database", "Updating index", 1, 1);
-		}
-		catch (OperationCanceledException)
-		{
-			cancelled = true;
+			report = run.Run(root, progress, SaveDuringScan, token);
+			if (!RetryPolicy.Network.Run(() => File.Exists(_store.CatalogPath), _work.Token))
+				SaveDuringScan();
 		}
 		finally
 		{
-			var total = _catalog.Count;
+			var summary = report.Summary;
+			var failed = report.FailedFolders.Select(f => WorkspacePaths.Absolute(WorkspacePath, f)).ToArray();
 			var absoluteRoot = WorkspacePaths.Absolute(WorkspacePath, root);
 			var seconds = (DateTime.UtcNow - started).TotalSeconds;
 			BackgroundWork.OnMainThread(() =>
@@ -237,9 +238,27 @@ public partial class AssetCatalog : RefCounted, ISerializationListener
 				_scanCancel?.Dispose();
 				_scanCancel = null;
 				_scanning = false;
-				EmitSignal(SignalName.ScanFinished, summary.Added, summary.Changed, summary.Removed, total, cancelled, absoluteRoot, seconds, summary.Retagged);
+				EmitSignal(SignalName.ScanFinished, summary.Added, summary.Changed, summary.Removed, _catalog.Count,
+					report.Cancelled, absoluteRoot, seconds, summary.Retagged, failed, report.Retries);
 			});
 		}
+	}
+
+	/// Stop does not cancel a save, only shutting down does: a stopped scan
+	/// keeps what it walked.
+	private void SaveDuringScan()
+	{
+		RetryPolicy.Network.Run(() => _store.SaveCatalog(_catalog), _work.Token);
+		BackgroundWork.OnMainThread(() => EmitSignal(SignalName.Changed));
+	}
+
+	private void ReportScan(ScanProgress p)
+	{
+		var label = p.CurrentFolder.Length == 0 ? $"{p.FilesSeen:N0} files" : $"{p.FilesSeen:N0} files - {p.CurrentFolder}";
+		if (p.Stage == "layout")
+			Report("scan", "Finding packs - " + p.CurrentFolder, 0, 0);
+		else
+			Report(p.Stage, label, p.UnitsDone, p.UnitsTotal);
 	}
 
 	private void Report(string stage, string label, int current, int total) =>

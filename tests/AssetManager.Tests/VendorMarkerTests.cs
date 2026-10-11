@@ -11,7 +11,7 @@ public class VendorMarkerTests
 		ws.Write("models/kenney/" + VendorMarker.FileName, "kenney");
 		ws.Write("models/kenney/props/barrel.glb");
 
-		var walk = LibraryScanner.Walk(ws.Root, "", Fixtures.Types(), null, CancellationToken.None);
+		var walk = Fixtures.Walk(ws.Root, "", CancellationToken.None);
 
 		Assert.Equal(["models/kenney/props/barrel.glb"], walk.Files.Select(f => f.RelPath));
 		Assert.Equal(["models/kenney"], walk.VendorRoots);
@@ -24,7 +24,7 @@ public class VendorMarkerTests
 		ws.Write("models/kenney/" + VendorMarker.FileName, "kenney");
 		ws.Write("models/kenney/props/pack/barrel.glb");
 
-		var walk = LibraryScanner.Walk(ws.Root, "models/kenney/props/pack", Fixtures.Types(), null, CancellationToken.None);
+		var walk = Fixtures.Walk(ws.Root, "models/kenney/props/pack", CancellationToken.None);
 
 		Assert.Contains("models/kenney", walk.VendorRoots);
 	}

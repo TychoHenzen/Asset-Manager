@@ -208,11 +208,19 @@ func _on_stop_scan() -> void:
 func _on_scan_progressed(stage: String, label: String, current: int, total: int) -> void:
 	_progress_dialog.on_progress({"stage": stage, "label": label, "current": current, "total": total})
 
-func _on_scan_finished(added: int, changed: int, removed: int, total: int, cancelled: bool, root: String, seconds: float, retagged: int) -> void:
+## How many unreadable folders are named in the warning; the count covers the rest.
+const MAX_FAILED_FOLDERS_SHOWN: int = 20
+
+func _on_scan_finished(added: int, changed: int, removed: int, total: int, cancelled: bool, root: String,
+		seconds: float, retagged: int, failed_folders: PackedStringArray, retries: int) -> void:
 	_progress_dialog.finish()
 	toolbar.set_scanning(false)
-	print("AssetManager: scanned %s in %.1fs%s: %d added, %d changed, %d removed, %d retagged, %d assets"
-		% [root, seconds, " (stopped)" if cancelled else "", added, changed, removed, retagged, total])
+	print("AssetManager: scanned %s in %.1fs%s: %d added, %d changed, %d removed, %d retagged, %d assets, %d retried requests"
+		% [root, seconds, " (stopped)" if cancelled else "", added, changed, removed, retagged, total, retries])
+	if not failed_folders.is_empty():
+		var shown := failed_folders.slice(0, MAX_FAILED_FOLDERS_SHOWN)
+		push_warning("AssetManager: %d folder(s) could not be read even after retrying; what was indexed under them is kept, and the next scan tries again:\n  %s%s"
+			% [failed_folders.size(), "\n  ".join(shown), "\n  ..." if failed_folders.size() > shown.size() else ""])
 	if added + changed + removed + retagged > 0:
 		_refresh_all_after_index_change()
 

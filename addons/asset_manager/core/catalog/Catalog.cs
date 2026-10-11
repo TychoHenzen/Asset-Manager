@@ -56,17 +56,22 @@ public sealed class Catalog
 			return new CatalogSnapshot(_byPath.Values.ToArray(), _tags.Names.ToArray());
 	}
 
-	/// Folds one walk into the catalog. Unchanged files keep their record, so a
-	/// rescan of an unchanged library costs the walk and a tag comparison.
-	/// Records under `scanRoot` that the walk did not see are removed; nothing
-	/// outside it is touched. `resourceTypeOf` reads a .tres header and is only
-	/// called for new or changed files of types that need it.
-	public ScanSummary ApplyScan(string scanRoot, ScanResult walk, long now, Func<string, string> resourceTypeOf)
+	/// Folds a batch of walked units into the catalog. Unchanged files keep
+	/// their record, so a rescan of an unchanged library costs the walk and a
+	/// tag comparison. Records the batch covers but did not see are removed,
+	/// except under folders that could not be listed; nothing else is touched.
+	/// `resourceTypeOf` reads a .tres header and is only called for new or
+	/// changed files of types that need it.
+	public ScanSummary ApplyScan(ScanResult walk, ScanCoverage coverage, long now, Func<string, string> resourceTypeOf)
 	{
 		string[] tagNames;
 		lock (_gate)
 			tagNames = _tags.Names.ToArray();
+
+		// Planning and the removal sweep read the dictionary outside the lock:
+		// only a scan or a load changes the record set, and only one scan runs.
 		var plan = ScanPlan.Build(walk, _byPath, tagNames, Types, resourceTypeOf);
+		var removed = PathsWhere(r => coverage.IsGone(r.RelPath, plan.Seen));
 
 		lock (_gate)
 		{
@@ -90,10 +95,6 @@ public sealed class Catalog
 				};
 			}
 
-			var removed = _byPath.Values
-				.Where(r => r.IsUnder(scanRoot) && !plan.Seen.Contains(r.RelPath))
-				.Select(r => r.RelPath)
-				.ToList();
 			foreach (var path in removed)
 				_byPath.Remove(path);
 
@@ -101,6 +102,26 @@ public sealed class Catalog
 			return new ScanSummary(plan.Additions.Count, plan.Changes.Count, removed.Count, _byPath.Count, plan.Retags.Count);
 		}
 	}
+
+	/// The end of a whole scan: removes records under `scanRoot` that no walked
+	/// unit covers (their pack folder is gone), except under folders that
+	/// could not be listed. Returns how many went.
+	public int RemoveUncovered(string scanRoot, ScanCoverage walked)
+	{
+		var removed = PathsWhere(r => r.IsUnder(scanRoot) && !walked.Covers(r.RelPath) && !walked.IsUnderFailedFolder(r.RelPath));
+		if (removed.Count == 0)
+			return 0;
+		lock (_gate)
+		{
+			foreach (var path in removed)
+				_byPath.Remove(path);
+			Invalidate();
+		}
+		return removed.Count;
+	}
+
+	private List<string> PathsWhere(Func<AssetRecord, bool> predicate) =>
+		_byPath.Values.Where(predicate).Select(r => r.RelPath).ToList();
 
 	public AssetRecord? Get(string relPath)
 	{

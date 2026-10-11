@@ -29,8 +29,25 @@ internal static class Fixtures
 		return catalog;
 	}
 
-	/// ApplyScan for a walk that found `files`, with `vendorRoots` marked.
+	/// ApplyScan for one walk of `scanRoot` that found `files`, with
+	/// `vendorRoots` marked.
 	public static ScanSummary ApplyFiles(this Catalog catalog, string scanRoot, IEnumerable<FoundFile> files, long now,
-		Func<string, string> resourceTypeOf, params string[] vendorRoots) =>
-		catalog.ApplyScan(scanRoot, new ScanResult(files.ToList(), new HashSet<string>(vendorRoots)), now, resourceTypeOf);
+		Func<string, string> resourceTypeOf, params string[] vendorRoots)
+	{
+		var walk = new ScanResult(files.ToList(), new HashSet<string>(vendorRoots));
+		var coverage = ScanCoverage.Of([new UnitResult(scanRoot, Recursive: true, walk.Files, [])]);
+		return catalog.ApplyScan(walk, coverage, now, resourceTypeOf);
+	}
+
+	/// Every file and vendor marker under `scanRoot` on disk, by way of the
+	/// layout and unit walks a scan makes.
+	public static ScanResult Walk(string workspaceRoot, string scanRoot, CancellationToken cancel = default)
+	{
+		var scanner = new LibraryScanner(new FileSystemLister(workspaceRoot), RetryPolicy.Immediate(0));
+		var layout = scanner.Layout(scanRoot, Types(), cancel);
+		var files = layout.Shallow.SelectMany(u => u.Files).ToList();
+		foreach (var unit in layout.Units)
+			files.AddRange(scanner.WalkUnit(unit, layout.VendorRoots, cancel).Files);
+		return new ScanResult(files, layout.VendorRoots);
+	}
 }

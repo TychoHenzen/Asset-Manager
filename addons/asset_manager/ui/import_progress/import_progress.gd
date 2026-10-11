@@ -4,19 +4,19 @@ extends AcceptDialog
 
 ## Progress for a scan, which runs in the background. Not modal: the editor
 ## stays usable while a large library is walked, and Hide only hides this, the
-## scan carries on. Stop cancels it; files already indexed stay indexed and the
+## scan carries on. Stop cancels it; packs already walked stay indexed and the
 ## next scan picks up the rest.
 ## Two tiers: the top row is which stage we're in, the bottom is progress
-## within it. A walk cannot know its total in advance, so while walking both
-## bars run indeterminate and the detail line counts files.
+## within it. The bars run indeterminate while the top folders are listed,
+## then count packs.
 
 signal stop_requested
 
 ## Ordered, so the top bar can show real overall progress rather than just
 ## naming a stage.
 const STAGES: Array[Dictionary] = [
-	{"id": "scan", "label": "Scanning files", "weight": 1.0},
-	{"id": "database", "label": "Updating index", "weight": 0.2},
+	{"id": "scan", "label": "Scanning packs", "weight": 1.0},
+	{"id": "retry", "label": "Retrying unreadable folders", "weight": 0.05},
 ]
 
 const STOP_ACTION: StringName = &"stop"
