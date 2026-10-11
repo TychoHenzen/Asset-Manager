@@ -73,8 +73,9 @@ public sealed class LibraryScanner(IDirectoryLister lister, RetryPolicy retry)
 
 	/// Walks `root` and everything below it. Folders that stay unreadable are
 	/// reported and skipped; the rest of the unit is still walked.
-	/// `onFolder(filesSoFar, folder)` is told after each folder.
-	public UnitResult WalkUnit(string root, HashSet<string> vendorRoots, CancellationToken cancel, Action<int, string>? onFolder = null)
+	/// `onFolder(soFar, folder)` is told after each folder, with the result as
+	/// it stands.
+	public UnitResult WalkUnit(string root, HashSet<string> vendorRoots, CancellationToken cancel, Action<UnitResult, string>? onFolder = null)
 	{
 		var result = new UnitResult(root, Recursive: true, [], []);
 		var queue = new Queue<string>();
@@ -94,7 +95,7 @@ public sealed class LibraryScanner(IDirectoryLister lister, RetryPolicy retry)
 				else
 					AddFile(dir, entry, result.Files, vendorRoots);
 			}
-			onFolder?.Invoke(result.Files.Count, dir);
+			onFolder?.Invoke(result, dir);
 		}
 		return result;
 	}

@@ -115,6 +115,28 @@ public class ScanRunTests
 	}
 
 	[Fact]
+	public void StoppingInsideABigPack_KeepsItsFoldersWalkedSoFar_AndRemovesNothingFromIt()
+	{
+		var catalog = Fixtures.CatalogWith(Fixtures.File($"{PackA}/old/gone.png"));
+		var library = new FakeLibrary($"{PackA}/s1/a.png", $"{PackA}/s2/b.png", $"{PackA}/s3/c.png");
+		using var cancel = new CancellationTokenSource();
+		library.BeforeList = folder =>
+		{
+			if (folder == $"{PackA}/s2")
+				cancel.Cancel();
+		};
+
+		var outcome = Run(catalog, library, cancel: cancel.Token);
+
+		// Stop lands while s2 is listed, so s3 is never reached. The pack never
+		// finished, so the record it no longer holds stays until a scan that
+		// does finish it.
+		Assert.True(outcome.Report.Cancelled);
+		Assert.Equal([$"{PackA}/old/gone.png", $"{PackA}/s1/a.png", $"{PackA}/s2/b.png"], Paths(catalog));
+		Assert.DoesNotContain($"{PackA}/s3", library.Listed);
+	}
+
+	[Fact]
 	public void AnUnchangedLibrary_IsNotSaved()
 	{
 		var catalog = Fixtures.CatalogWith(Fixtures.File($"{PackA}/a.png"));

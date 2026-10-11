@@ -89,8 +89,18 @@ public sealed class ScanRun(Catalog catalog, LibraryScanner scanner, Func<string
 		{
 			cancel.ThrowIfCancellationRequested();
 			var done = i;
-			var unit = scanner.WalkUnit(roots[i], _vendorRoots, cancel, (files, folder) =>
-				progress?.Report(new ScanProgress(stage, _filesSeen + files, folder, done, roots.Count)));
+			// Some packs hold hundreds of thousands of files and take many
+			// minutes, so their files so far are applied as they come too.
+			var applied = 0;
+			var unit = scanner.WalkUnit(roots[i], _vendorRoots, cancel, (partial, folder) =>
+			{
+				progress?.Report(new ScanProgress(stage, _filesSeen + partial.Files.Count, folder, done, roots.Count));
+				if (_sinceApply.Elapsed < ApplyEvery)
+					return;
+				Apply(partial.Files.Skip(applied));
+				applied = partial.Files.Count;
+				SaveIfDue(save, changed: false);
+			});
 			_filesSeen += unit.Files.Count;
 			failures.AddRange(unit.FailedDirs);
 			_pending.Add(unit);
@@ -102,12 +112,17 @@ public sealed class ScanRun(Catalog catalog, LibraryScanner scanner, Func<string
 		progress?.Report(new ScanProgress(stage, _filesSeen, "", roots.Count, roots.Count));
 	}
 
-	private void Apply()
+	/// Folds the finished units into the catalog, plus `unfinished` files of a
+	/// unit still being walked. Those are only added or updated: until the
+	/// unit is done nothing can be said about what it no longer holds, so its
+	/// removals wait for the unit's own apply, which sees all its files.
+	private void Apply(IEnumerable<FoundFile>? unfinished = null)
 	{
 		_sinceApply.Restart();
-		if (_pending.Count == 0)
+		var files = _pending.SelectMany(u => u.Files).Concat(unfinished ?? []).ToList();
+		if (files.Count == 0 && _pending.Count == 0)
 			return;
-		var walk = new ScanResult(_pending.SelectMany(u => u.Files).ToList(), _vendorRoots);
+		var walk = new ScanResult(files, _vendorRoots);
 		var batch = catalog.ApplyScan(walk, ScanCoverage.Of(_pending), now(), resourceTypeOf);
 		_walked.AddRange(_pending);
 		_pending.Clear();
