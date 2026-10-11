@@ -23,6 +23,8 @@ var _scan_starting: bool = false
 var _settings: SettingsManager = SettingsManager.new()
 var _thumbnails: ThumbnailLoader
 var _progress_dialog: ImportProgressDialog
+var _remove_dialog: ConfirmationDialog
+var _pending_removal: PackedStringArray = []
 
 const PROGRESS_DIALOG_SCENE := preload("res://addons/asset_manager/ui/import_progress/import_progress.tscn")
 
@@ -66,9 +68,11 @@ func _ready() -> void:
 	_grid.open_location_requested.connect(_on_open_location_pressed)
 	_grid.open_external_requested.connect(_on_open_external_pressed)
 	_grid.send_to_project_requested.connect(_on_send_to_project_pressed)
+	_grid.remove_from_project_requested.connect(_on_remove_from_project_pressed)
 	_grid.add_requested.connect(_on_add_pressed)
 
 	_preview.send_to_project_pressed.connect(_on_send_to_project_pressed)
+	_preview.remove_from_project_pressed.connect(_on_remove_from_project_pressed)
 	_preview.open_external_pressed.connect(_on_open_external_pressed)
 	_preview.open_location_pressed.connect(_on_open_location_pressed)
 	_preview.add_tag_requested.connect(_on_add_tag_requested)
@@ -85,6 +89,17 @@ func _ready() -> void:
 	toolbar.sidebar_toggled.connect(func(collapsed: bool) -> void: _sidebar.visible = not collapsed)
 
 	get_window().files_dropped.connect(_on_files_dropped)
+
+	_remove_dialog = ConfirmationDialog.new()
+	_remove_dialog.title = "Remove from Project"
+	_remove_dialog.ok_button_text = "Delete"
+	_remove_dialog.confirmed.connect(_on_remove_confirmed)
+	add_child(_remove_dialog)
+
+	# Files deleted in the FileSystem dock, or sent from another tab, change
+	# what is in the project without passing through here.
+	if Engine.is_editor_hint():
+		EditorInterface.get_resource_filesystem().filesystem_changed.connect(_refresh_presence)
 
 	_preview.setup(_settings)
 	_init_workspace_picker()
@@ -424,9 +439,11 @@ func _on_selection_changed(path: String) -> void:
 
 	if has_selection:
 		_preview.show_asset(path, _catalog.TypeOf(path))
+		_preview.set_in_project(_selected_in_project())
 		asset_selected.emit(path)
 	else:
 		_preview.clear()
+		_preview.set_in_project(false)
 
 	_preview.refresh_tags(_selected_paths())
 
@@ -446,7 +463,7 @@ func _on_send_to_project_pressed() -> void:
 	if type_id.is_empty():
 		return
 
-	var dest_dir := project_settings_dialog.get_export_root(type_id)
+	var dest_dir := ExportRoots.get_root(type_id)
 	var result := AssetExporter.export_asset(current_selected_path, dest_dir, type_id, current_workspace_path)
 
 	for error_msg in result["errors"]:
@@ -460,7 +477,52 @@ func _on_send_to_project_pressed() -> void:
 		summary += ", " + str(result["skipped_existing_count"]) + " already present"
 	if not result["errors"].is_empty():
 		summary += ", " + str(result["errors"].size()) + " error(s)"
+	_refresh_presence()
 	_preview.flash_send_result(summary)
+
+## Lists what would go and asks first: the delete is permanent.
+func _on_remove_from_project_pressed() -> void:
+	var dest_path := _selected_project_path()
+	if dest_path.is_empty():
+		return
+
+	_pending_removal = AssetRemover.files_for(dest_path)
+	if _pending_removal.is_empty():
+		_refresh_presence()
+		return
+
+	_remove_dialog.dialog_text = "Permanently delete %d file(s)?\n\n%s" % [_pending_removal.size(), "\n".join(_pending_removal)]
+	_remove_dialog.popup_centered()
+
+func _on_remove_confirmed() -> void:
+	var result := AssetRemover.remove(_pending_removal)
+	_pending_removal = []
+
+	for error_msg in result["errors"]:
+		push_error("AssetManager: ", error_msg)
+
+	var summary := str(result["removed_count"]) + " file(s) removed"
+	if not result["errors"].is_empty():
+		summary += ", " + str(result["errors"].size()) + " error(s)"
+	_refresh_presence()
+	_preview.flash_send_result(summary)
+
+## "" when nothing is selected or its type is unknown.
+func _selected_project_path() -> String:
+	if current_selected_path.is_empty() or _catalog == null:
+		return ""
+	var type_id := _catalog.TypeOf(current_selected_path)
+	if type_id.is_empty():
+		return ""
+	return AssetExporter.project_path(current_selected_path, type_id, current_workspace_path)
+
+func _selected_in_project() -> bool:
+	var dest_path := _selected_project_path()
+	return not dest_path.is_empty() and FileAccess.file_exists(dest_path)
+
+func _refresh_presence() -> void:
+	_grid.refresh_presence()
+	_preview.set_in_project(_selected_in_project())
 
 ## scan_sources() + awaiting resources_reimported works around a Godot core
 ## reentrancy bug (godotengine/godot#54864). Re-test before changing it.

@@ -3,6 +3,7 @@ class_name PreviewPanel
 extends PanelContainer
 
 signal send_to_project_pressed
+signal remove_from_project_pressed
 signal open_external_pressed
 signal open_location_pressed
 signal add_tag_requested(tag_text: String)
@@ -31,6 +32,9 @@ const BASE_DEFAULT_WIDTH: int = -320
 
 var _bodies: Dictionary = {}
 var _current_type: String = ""
+## The main button sends an asset that isn't in the project yet and removes
+## one that is.
+var _in_project: bool = false
 
 @onready var _stage: PanelContainer = $VBox/Stage
 @onready var _slot: Control = $VBox/Stage/PreviewSlot
@@ -49,7 +53,7 @@ func _ready() -> void:
 
 	_stage.gui_input.connect(_on_stage_gui_input)
 
-	_send_button.pressed.connect(func() -> void: send_to_project_pressed.emit())
+	_send_button.pressed.connect(_on_send_button_pressed)
 	_external_button.pressed.connect(func() -> void: open_external_pressed.emit())
 	_location_button.pressed.connect(func() -> void: open_location_pressed.emit())
 
@@ -62,8 +66,8 @@ func _ready() -> void:
 
 	_apply_style()
 
-## Send to Project is what the panel is for, so it takes the width and the accent
-## icon. Reveal and open-external are occasional, so they shrink to icons.
+## Send to Project (or Remove, see set_in_project) is what the panel is for, so it
+## takes the width and the accent icon. Reveal and open-external are occasional, so they shrink to icons.
 func _apply_style() -> void:
 	if not Engine.is_editor_hint():
 		return
@@ -229,10 +233,29 @@ func apply_tag_change(selected_paths: Array, tag_text: String, add: bool) -> voi
 func set_catalog(catalog: AssetCatalog) -> void:
 	_tag_editor.catalog = catalog
 
+## A no-op when nothing changed: filesystem_changed lands a few frames after a
+## send, and rewriting the label then would wipe the send's summary.
+func set_in_project(present: bool) -> void:
+	if present == _in_project:
+		return
+	_in_project = present
+	_send_button.text = _send_button_label()
+	_set_icon(_send_button, "Remove" if present else "Add")
+
+## Restores the label for whatever the asset's state is by then, not the one
+## that was showing: a send or remove changes it under the flash.
 func flash_send_result(summary: String) -> void:
-	var original := _send_button.text
 	_send_button.text = summary
-	get_tree().create_timer(2.5).timeout.connect(func() -> void: _send_button.text = original)
+	get_tree().create_timer(2.5).timeout.connect(func() -> void: _send_button.text = _send_button_label())
+
+func _send_button_label() -> String:
+	return "Remove from Project" if _in_project else "Send to Project"
+
+func _on_send_button_pressed() -> void:
+	if _in_project:
+		remove_from_project_pressed.emit()
+	else:
+		send_to_project_pressed.emit()
 
 func _on_stage_gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed:

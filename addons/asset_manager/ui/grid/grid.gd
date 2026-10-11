@@ -10,6 +10,7 @@ signal item_activated(path: String)
 signal open_location_requested
 signal open_external_requested
 signal send_to_project_requested
+signal remove_from_project_requested
 signal add_requested(type_id: String)
 
 var catalog: AssetCatalog
@@ -29,6 +30,9 @@ var _total_pages: int = 1
 ## carry the same id, so a late one for a page already left is ignored.
 var _request_id: int = 0
 var _item_by_path: Dictionary = {}
+var _type_by_path: Dictionary = {}
+## Paths on this page whose file is already at its project destination.
+var _in_project: Dictionary = {}
 
 ## Typing in the search box changes the filter per keystroke, and each query
 ## walks the whole catalog, so a burst of changes becomes one query.
@@ -50,6 +54,10 @@ var _add_type_ids: Array[String] = []
 const MENU_OPEN_LOCATION: int = 0
 const MENU_OPEN_EXTERNAL: int = 1
 const MENU_SEND_TO_PROJECT: int = 2
+const MENU_REMOVE_FROM_PROJECT: int = 3
+
+## Tile tint for assets already in the project, at this alpha over the accent.
+const IN_PROJECT_TINT_ALPHA: float = 0.25
 
 func _ready() -> void:
 	if EditorGuard.is_scene_tab(self):
@@ -174,6 +182,8 @@ func _on_query_ready(request_id: int, paths: PackedStringArray, types: PackedStr
 	_list.clear()
 	_animator.clear()
 	_item_by_path.clear()
+	_type_by_path.clear()
+	_in_project.clear()
 
 	_page = page
 	_total_pages = total_pages
@@ -185,8 +195,9 @@ func _on_query_ready(request_id: int, paths: PackedStringArray, types: PackedStr
 		var path := paths[i]
 		var idx := _list.add_item(path.get_file(), _type_icon(types[i]))
 		_list.set_item_metadata(idx, path)
-		_list.set_item_tooltip(idx, path)
 		_item_by_path[path] = idx
+		_type_by_path[path] = types[i]
+		_mark_presence(idx, path)
 
 	_update_empty_state(total)
 	thumbnails.request(request_id, paths, types, sizes, mtimes)
@@ -199,6 +210,34 @@ func _on_thumbnail_ready(request_id: int, path: String, texture: Texture2D) -> v
 		return
 	_list.set_item_icon(idx, _animator.register(idx, texture))
 	_animator.start()
+
+## Re-checks every tile on the page against the project, after a send or a
+## remove, or when the project's files change underneath.
+func refresh_presence() -> void:
+	for path: String in _item_by_path:
+		_mark_presence(_item_by_path[path], path)
+
+func is_in_project(path: String) -> bool:
+	return _in_project.has(path)
+
+func _mark_presence(idx: int, path: String) -> void:
+	var present := AssetExporter.is_in_project(path, _type_by_path[path], catalog.WorkspacePath)
+	if present:
+		_in_project[path] = true
+		_list.set_item_custom_bg_color(idx, _in_project_tint())
+		_list.set_item_tooltip(idx, "%s
+In project: %s" % [path, AssetExporter.project_path(path, _type_by_path[path], catalog.WorkspacePath)])
+	else:
+		_in_project.erase(path)
+		_list.set_item_custom_bg_color(idx, Color(0, 0, 0, 0))
+		_list.set_item_tooltip(idx, path)
+
+func _in_project_tint() -> Color:
+	var accent := Color(0.44, 0.73, 0.98)
+	if Engine.is_editor_hint():
+		accent = EditorInterface.get_editor_theme().get_color("accent_color", "Editor")
+	accent.a = IN_PROJECT_TINT_ALPHA
+	return accent
 
 ## Two different nothings: a workspace with no assets at all needs telling where
 ## assets come from, a filter that matched nothing just needs saying so.
@@ -271,8 +310,8 @@ func _on_item_selected(index: int) -> void:
 func _on_item_activated(index: int) -> void:
 	item_activated.emit(_list.get_item_metadata(index))
 
-## The same three actions the preview panel offers, on whichever asset was
-## right-clicked. allow_rmb_select means it is already the selection by now.
+## The preview panel's actions, on whichever asset was right-clicked.
+## allow_rmb_select means it is already the selection by now.
 func _on_item_clicked(index: int, at_position: Vector2, mouse_button_index: int) -> void:
 	if mouse_button_index != MOUSE_BUTTON_RIGHT:
 		return
@@ -284,6 +323,10 @@ func _on_item_clicked(index: int, at_position: Vector2, mouse_button_index: int)
 	_context_menu.add_icon_item(IconHelper.get_icon("ExternalLink"), "Open in Default Application", MENU_OPEN_EXTERNAL)
 	_context_menu.add_separator()
 	_context_menu.add_icon_item(IconHelper.get_icon("Add"), "Send to Project", MENU_SEND_TO_PROJECT)
+	# Send stays offered alongside: a re-send skips what is there and fills in
+	# what is missing, such as textures for a model sent before they came along.
+	if is_in_project(_list.get_item_metadata(index)):
+		_context_menu.add_icon_item(IconHelper.get_icon("Remove"), "Remove from Project", MENU_REMOVE_FROM_PROJECT)
 
 	_context_menu.position = Vector2i(_list.get_screen_position() + at_position)
 	_context_menu.reset_size()
@@ -297,6 +340,8 @@ func _on_context_menu_pressed(id: int) -> void:
 			open_external_requested.emit()
 		MENU_SEND_TO_PROJECT:
 			send_to_project_requested.emit()
+		MENU_REMOVE_FROM_PROJECT:
+			remove_from_project_requested.emit()
 
 ## Shift+scroll resizes tiles, the same gesture every canvas app trains, the
 ## slider in the sub-toolbar is the discoverable version of it.
