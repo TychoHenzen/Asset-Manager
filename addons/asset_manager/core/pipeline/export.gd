@@ -67,6 +67,16 @@ static func export_asset(source_path: String, dest_dir: String, type_id: String,
 	var dest_path := _compute_dest_path(source_path, dest_dir, type_id, workspace_path)
 	return handler.export_asset(source_path, dest_path, type_id)
 
+## Where Send to Project puts this asset under the project's export roots.
+static func project_path(source_path: String, type_id: String, workspace_path: String) -> String:
+	return _compute_dest_path(source_path, ExportRoots.get_root(type_id), type_id, workspace_path)
+
+## A file already at the asset's destination is taken to be that asset: packs
+## don't reuse a name within one relative path. The project is local, so this
+## is cheap enough to ask for every tile on a page.
+static func is_in_project(source_path: String, type_id: String, workspace_path: String) -> bool:
+	return FileAccess.file_exists(project_path(source_path, type_id, workspace_path))
+
 static func _compute_dest_path(source_path: String, dest_dir: String, type_id: String, workspace_path: String) -> String:
 	var bucket_root := workspace_path.path_join(type_id)
 	if not source_path.begins_with(bucket_root):

@@ -3,7 +3,7 @@
 [ext_resource type="Script" uid="uid://bparahwdi4jl3" path="res://addons/asset_manager/ui/import_progress/import_progress.gd" id="1_elbxu"]
 
 [node name="ImportProgress" type="AcceptDialog" unique_id=1190868829]
-title = "Rebuilding Index"
+title = "Scanning Library"
 size = Vector2i(900, 190)
 unresizable = true
 script = ExtResource("1_elbxu")

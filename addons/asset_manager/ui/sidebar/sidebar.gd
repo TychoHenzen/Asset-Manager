@@ -5,6 +5,9 @@ extends VBoxContainer
 signal filter_changed
 signal open_folder_requested(path: String)
 signal add_requested(type_id: String)
+## Scan one folder for new, changed and removed files (the workspace itself
+## for the Assets row).
+signal rescan_requested(path: String)
 
 ## Tags past this are hidden behind "Show more", an unbounded list buries
 ## extensions below the fold.
@@ -15,8 +18,12 @@ const TAG_LIMIT: int = 10
 const COL_NAME: int = 0
 const COL_COUNT: int = 1
 
-var database: AssetDatabase
+var catalog: AssetCatalog
 var workspace_path: String = ""
+
+## Counting walks the whole catalog, so it runs in the background; only the
+## newest answer is drawn.
+var _stats_request: int = 0
 
 var active_folder_prefix: String = ""
 var active_type_id: String = ""
@@ -35,6 +42,7 @@ var _menu_folder_path: String = ""
 
 const MENU_OPEN_FOLDER: int = 0
 const MENU_ADD: int = 1
+const MENU_RESCAN: int = 2
 
 ## Both taken from Godot's own docks, and both scaled by get_editor_scale(),
 ## a raw pixel value is half its intended size on a 200% display.
@@ -88,11 +96,24 @@ func _apply_panel_style() -> void:
 func _editor_scale() -> float:
 	return EditorInterface.get_editor_scale() if Engine.is_editor_hint() else 1.0
 
-func refresh() -> void:
-	if database == null:
-		return
+func set_catalog(p_catalog: AssetCatalog, p_workspace_path: String) -> void:
+	catalog = p_catalog
+	workspace_path = p_workspace_path
+	# A bound method: a lambda connected to a C# signal crashes Godot on exit
+	# (see AssetCatalog).
+	catalog.StatsReady.connect(_on_stats_ready)
 
-	var stats := _gather_stats()
+## Asks for fresh counts; _on_stats_ready rebuilds the tree.
+func refresh() -> void:
+	if catalog == null:
+		return
+	_stats_request += 1
+	catalog.Stats(_stats_request, active_folder_prefix)
+
+func _on_stats_ready(request_id: int, stats_json: String) -> void:
+	if request_id != _stats_request:
+		return
+	var stats: Dictionary = _counts_as_ints(JSON.parse_string(stats_json))
 
 	_tree.clear()
 	var root := _tree.create_item()
@@ -118,48 +139,18 @@ func _select_active_folder(item: TreeItem) -> bool:
 		child = child.get_next()
 	return false
 
-## One pass over the index for everything the sidebar needs: folder structure,
-## per-type counts, tag counts and extension counts.
-func _gather_stats() -> Dictionary:
-	var folders: Dictionary = {}
-	var tags: Dictionary = {}
-	var extensions: Dictionary = {}
-	var total: int = 0
-
-	for path: String in database.assets:
-		total += 1
-
-		var relative := path.trim_prefix(workspace_path + "/")
-		var first_slash := relative.find("/")
-		if first_slash != -1:
-			var type_id := relative.substr(0, first_slash)
-			var rest := relative.substr(first_slash + 1)
-
-			if not folders.has(type_id):
-				folders[type_id] = {"subfolders": {}, "count": 0}
-			folders[type_id]["count"] += 1
-
-			var second_slash := rest.find("/")
-			if second_slash != -1:
-				var sub_name := rest.substr(0, second_slash)
-				var children: Dictionary = folders[type_id]["subfolders"].get_or_add(sub_name, {})
-				var deeper := rest.substr(second_slash + 1)
-				var third_slash := deeper.find("/")
-				if third_slash != -1:
-					children[deeper.substr(0, third_slash)] = true
-
-		# Tag and extension counts are scoped to the active folder, so a count
-		# always describes what clicking it would actually give you.
-		if not active_folder_prefix.is_empty() and not path.begins_with(active_folder_prefix):
-			continue
-
-		for tag in database.assets[path].get("tags", []):
-			tags[tag] = tags.get(tag, 0) + 1
-
-		var ext := path.get_extension().to_lower()
-		extensions[ext] = extensions.get(ext, 0) + 1
-
-	return {"folders": folders, "tags": tags, "extensions": extensions, "total": total}
+## The catalog counts in C# and sends JSON, where every number comes back as
+## a float. format_count and the checkboxes want ints.
+static func _counts_as_ints(stats: Dictionary) -> Dictionary:
+	for key in ["tags", "extensions"]:
+		var counts: Dictionary = stats[key]
+		for name: String in counts:
+			counts[name] = int(counts[name])
+	var folders: Dictionary = stats["folders"]
+	for type_id: String in folders:
+		folders[type_id]["count"] = int(folders[type_id]["count"])
+	stats["total"] = int(stats["total"])
+	return stats
 
 ## "Assets" is the section row AND the way back to everything, selecting it
 ## clears the folder filter.
@@ -340,8 +331,8 @@ func _on_item_selected() -> void:
 	call_deferred("refresh")
 	call_deferred("emit_signal", "filter_changed")
 
-## Type headings only. Subfolders carry a type_id too, so the path has to be
-## the bucket root itself for the menu to mean what it says.
+## Any folder row: open it, or rescan just that folder. Type headings also
+## offer Add.
 func _on_item_mouse_selected(position: Vector2, mouse_button_index: int) -> void:
 	if mouse_button_index != MOUSE_BUTTON_RIGHT:
 		return
@@ -354,17 +345,23 @@ func _on_item_mouse_selected(position: Vector2, mouse_button_index: int) -> void
 	if not (meta is Dictionary) or meta.get("type") != "folder":
 		return
 
+	# The Assets row stands for the whole workspace.
 	var type_id: String = meta.get("type_id", "")
 	var path: String = meta.get("path", "")
-	if type_id.is_empty() or path != workspace_path.path_join(type_id):
-		return
+	if path.is_empty():
+		path = workspace_path
+	var is_type_heading := not type_id.is_empty() and path == workspace_path.path_join(type_id)
 
 	_menu_type_id = type_id
 	_menu_folder_path = path
 
 	_type_menu.clear()
 	_type_menu.add_icon_item(_icon_for("Folder"), "Open Folder", MENU_OPEN_FOLDER)
-	_type_menu.add_icon_item(_icon_for("Add"), "Add %s…" % type_id, MENU_ADD)
+	_type_menu.add_icon_item(_icon_for("Reload"), "Rescan Folder", MENU_RESCAN)
+	# Subfolders carry a type_id too; only the bucket root itself is the place
+	# "Add <type>" means.
+	if is_type_heading:
+		_type_menu.add_icon_item(_icon_for("Add"), "Add %s…" % type_id, MENU_ADD)
 
 	_type_menu.position = Vector2i(_tree.get_screen_position() + position)
 	_type_menu.reset_size()
@@ -376,6 +373,8 @@ func _on_type_menu_pressed(id: int) -> void:
 			open_folder_requested.emit(_menu_folder_path)
 		MENU_ADD:
 			add_requested.emit(_menu_type_id)
+		MENU_RESCAN:
+			rescan_requested.emit(_menu_folder_path)
 
 func _on_item_edited() -> void:
 	var item := _tree.get_edited()

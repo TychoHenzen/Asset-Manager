@@ -29,9 +29,6 @@ const ENABLE_FLAGS: Dictionary = {
 	"subsurf_scatter_texture": "subsurf_scatter_enabled",
 }
 
-static func work_kind() -> int:
-	return ThumbnailStage.WORK_VIEWPORT
-
 ## Decode only, no ImageTexture (registers with the rendering server, main
 ## thread only).
 static func prepare(path: String) -> Variant:
@@ -59,10 +56,10 @@ static func prepare(path: String) -> Variant:
 ## trilinear, trilinear generates mipmaps first which we have no use for.
 static func _shrink(image: Image) -> Image:
 	var longest := maxi(image.get_width(), image.get_height())
-	if longest <= ThumbnailCache.THUMB_SIZE:
+	if longest <= ThumbnailSizes.THUMB_SIZE:
 		return image
 
-	var scale := float(ThumbnailCache.THUMB_SIZE) / float(longest)
+	var scale := float(ThumbnailSizes.THUMB_SIZE) / float(longest)
 	image.resize(
 		maxi(1, int(image.get_width() * scale)),
 		maxi(1, int(image.get_height() * scale)),
@@ -75,7 +72,7 @@ static func _shrink(image: Image) -> Image:
 static func reuses_main_viewport() -> bool:
 	return true
 
-## Build without capturing, lets the stage render a whole chunk in one frame
+## Build without capturing, lets LazyThumbnailRenderer render a whole chunk in one frame
 ## (ThumbnailViewport.capture_batch).
 static func build_subject(prepared: Variant, _path: String) -> Node3D:
 	return _build(prepared)

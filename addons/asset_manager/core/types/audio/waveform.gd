@@ -6,7 +6,6 @@ const WAVE_COLOR: Color = Color(0.55, 0.55, 0.55, 0.9)
 const PLAYED_COLOR: Color = Color(0.35, 0.65, 1.0, 0.95)
 const PLACEHOLDER_COLOR: Color = Color(0.5, 0.5, 0.5, 0.5)
 const BG_COLOR: Color = Color(0, 0, 0, 0)
-const TARGET_SAMPLES_PER_BUCKET: int = 200
 const DECODE_CHUNK_FRAMES: int = 65536
 const MAX_DECODE_FRAMES: int = 44100 * 60 * 20 # 20 minutes @ 44.1kHz
 
@@ -52,43 +51,19 @@ static func _frames_from_wav(wav: AudioStreamWAV) -> PackedVector2Array:
 	return frames
 
 func _decode_and_bucket_async(stream: AudioStream, width: int, estimated_total_frames: int) -> Array[Vector2]:
-	var peaks: Array[Vector2] = []
 	var playback := stream.instantiate_playback()
 	if playback == null:
-		return peaks
+		return []
 
 	playback.start(0.0)
-
-	var frames_per_column := maxf(1.0, float(maxi(1, estimated_total_frames)) / float(width))
-	var stride := maxi(1, int(frames_per_column / TARGET_SAMPLES_PER_BUCKET))
-
-	var current_column := 0
-	var column_end_frame := int(frames_per_column)
-	var min_val := 1.0
-	var max_val := -1.0
-	var global_frame := 0
+	var columns := PeakColumns.new(width, estimated_total_frames)
 	var chunks_since_yield := 0
 
-	while global_frame < MAX_DECODE_FRAMES:
+	while columns.frames_seen() < MAX_DECODE_FRAMES:
 		var chunk: PackedVector2Array = playback.mix_audio(1.0, DECODE_CHUNK_FRAMES)
 		if chunk.is_empty():
 			break
-
-		var i := 0
-		while i < chunk.size():
-			while global_frame + i >= column_end_frame and current_column < width:
-				peaks.append(Vector2(min_val, max_val))
-				current_column += 1
-				column_end_frame = int((current_column + 1) * frames_per_column)
-				min_val = 1.0
-				max_val = -1.0
-
-			var sample: float = chunk[i].x
-			min_val = minf(min_val, sample)
-			max_val = maxf(max_val, sample)
-			i += stride
-
-		global_frame += chunk.size()
+		columns.add(chunk)
 		if chunk.size() < DECODE_CHUNK_FRAMES:
 			break # short chunk = end of stream.
 
@@ -98,15 +73,32 @@ func _decode_and_bucket_async(stream: AudioStream, width: int, estimated_total_f
 			await Engine.get_main_loop().process_frame
 
 	playback.stop()
+	return columns.finish()
 
-	if current_column < width and (min_val <= max_val):
-		peaks.append(Vector2(min_val, max_val))
-		current_column += 1
-	while current_column < width:
-		peaks.append(Vector2(0.0, 0.0))
-		current_column += 1
+## Worker-thread version for thumbnails: the same peaks, computed in one go
+## with no yielding. A playback that is never handed to the audio server is a
+## plain decoder, so mixing it here races with nothing.
+static func peaks_blocking(stream: AudioStream, width: int) -> Array[Vector2]:
+	if stream is AudioStreamWAV:
+		return _bucket_peaks(_frames_from_wav(stream as AudioStreamWAV), width)
+	if not (stream is AudioStreamOggVorbis or stream is AudioStreamMP3):
+		return []
 
-	return peaks
+	var playback := stream.instantiate_playback()
+	if playback == null:
+		return []
+
+	playback.start(0.0)
+	var columns := PeakColumns.new(width, int(stream.get_length() * 44100.0))
+	while columns.frames_seen() < MAX_DECODE_FRAMES:
+		var chunk: PackedVector2Array = playback.mix_audio(1.0, DECODE_CHUNK_FRAMES)
+		if chunk.is_empty():
+			break
+		columns.add(chunk)
+		if chunk.size() < DECODE_CHUNK_FRAMES:
+			break
+	playback.stop()
+	return columns.finish()
 
 static func _bucket_peaks(frames: PackedVector2Array, width: int) -> Array[Vector2]:
 	var peaks: Array[Vector2] = []
@@ -115,7 +107,7 @@ static func _bucket_peaks(frames: PackedVector2Array, width: int) -> Array[Vecto
 		return peaks
 
 	var frames_per_column := maxf(1.0, float(frame_count) / float(width))
-	var step := maxi(1, int(frames_per_column / TARGET_SAMPLES_PER_BUCKET))
+	var step := maxi(1, int(frames_per_column / PeakColumns.TARGET_SAMPLES_PER_BUCKET))
 
 	for x in range(width):
 		var start_frame := int(x * frames_per_column)
