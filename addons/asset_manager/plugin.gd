@@ -31,6 +31,9 @@ func _make_visible(visible: bool) -> void:
 	if main_panel_instance:
 		var was_visible := main_panel_instance.visible
 		main_panel_instance.visible = visible
+		# The workspace loads on first show, not at editor start (see activate).
+		if visible and main_panel_instance.has_method("activate"):
+			main_panel_instance.activate()
 		if visible and not was_visible and main_panel_instance.has_method("sync_if_stale"):
 			main_panel_instance.sync_if_stale()
 			main_panel_instance.focus_search()
