@@ -31,10 +31,13 @@ var _versions_request: int = 0
 ## The sidebar folder as last saved, relative to the workspace, so a search
 ## keystroke does not rewrite the settings file.
 var _remembered_folder: String = ""
-## The workspace is opened on first use, not when the editor starts: loading a
-## 1.77M-record catalog costs about 0.2 GB and a background read, and a project
-## that never shows this tab should not pay for either.
+## The workspace is opened on first use, not when the editor starts: a
+## 1.77M-record catalog shown in the All view costs about 1.4 GB (the records,
+## the sort orders, the version groups and a page of thumbnails), and a session
+## that never uses this tab should not pay for it.
 var _activated: bool = false
+## Covers the panel while the tab is shown but the library is not loaded.
+var _wait_overlay: Control
 ## True from the catalog's Opened signal until it is closed. A scan asked for
 ## before then would race the load, so it waits in _pending_rescans.
 var _catalog_open: bool = false
@@ -125,7 +128,42 @@ func activate() -> void:
 	if _activated:
 		return
 	_activated = true
+	if _wait_overlay != null:
+		_wait_overlay.queue_free()
+		_wait_overlay = null
 	_init_workspace_picker()
+
+## Shows the tab without loading the library: the editor restored it at start,
+## before anyone used it. A click on the panel, Load library, Ctrl+F or a
+## folder sent from the FileSystem dock loads it.
+func wait_for_use() -> void:
+	if _activated or _wait_overlay != null:
+		return
+	_wait_overlay = _build_wait_overlay()
+	add_child(_wait_overlay)
+
+func _build_wait_overlay() -> Control:
+	var overlay := PanelContainer.new()
+	overlay.name = "WaitForUse"
+	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.gui_input.connect(func(event: InputEvent) -> void:
+		if event is InputEventMouseButton and event.is_pressed():
+			activate()
+	)
+	var center := CenterContainer.new()
+	overlay.add_child(center)
+	var box := VBoxContainer.new()
+	center.add_child(box)
+	var label := Label.new()
+	label.text = "The asset library loads when you use it."
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(label)
+	var button := Button.new()
+	button.text = "Load library"
+	button.pressed.connect(activate)
+	box.add_child(button)
+	return overlay
 
 ## The plugin fills the main screen the way 2D/3D/Script do, so it should sit
 ## as flush to the edges as they do. interface/theme/base_spacing is the
@@ -167,6 +205,7 @@ func _shortcut_input(event: InputEvent) -> void:
 	if key == null or not key.pressed:
 		return
 	if key.keycode == KEY_F and (key.ctrl_pressed or key.meta_pressed):
+		activate()
 		toolbar.focus_search_and_select()
 		get_viewport().set_input_as_handled()
 
