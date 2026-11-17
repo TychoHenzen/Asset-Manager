@@ -31,6 +31,17 @@ var _versions_request: int = 0
 ## The sidebar folder as last saved, relative to the workspace, so a search
 ## keystroke does not rewrite the settings file.
 var _remembered_folder: String = ""
+## The workspace is opened on first use, not when the editor starts: a
+## 1.77M-record catalog shown in the All view costs about 1.4 GB (the records,
+## the sort orders, the version groups and a page of thumbnails), and a session
+## that never uses this tab should not pay for it.
+var _activated: bool = false
+## Covers the panel while the tab is shown but the library is not loaded.
+var _wait_overlay: Control
+## True from the catalog's Opened signal until it is closed. A scan asked for
+## before then would race the load, so it waits in _pending_rescans.
+var _catalog_open: bool = false
+var _pending_rescans: PackedStringArray = []
 
 const PROGRESS_DIALOG_SCENE := preload("res://addons/asset_manager/ui/import_progress/import_progress.tscn")
 
@@ -109,7 +120,50 @@ func _ready() -> void:
 		EditorInterface.get_resource_filesystem().filesystem_changed.connect(_refresh_presence)
 
 	_preview.setup(_settings)
+
+## Opens the remembered workspace (or shows the picker) the first time the
+## library is needed: the tab being shown, or a file sent from the FileSystem
+## dock. Later calls do nothing.
+func activate() -> void:
+	if _activated:
+		return
+	_activated = true
+	if _wait_overlay != null:
+		_wait_overlay.queue_free()
+		_wait_overlay = null
 	_init_workspace_picker()
+
+## Shows the tab without loading the library: the editor restored it at start,
+## before anyone used it. A click on the panel, Load library, Ctrl+F or a
+## folder sent from the FileSystem dock loads it.
+func wait_for_use() -> void:
+	if _activated or _wait_overlay != null:
+		return
+	_wait_overlay = _build_wait_overlay()
+	add_child(_wait_overlay)
+
+func _build_wait_overlay() -> Control:
+	var overlay := PanelContainer.new()
+	overlay.name = "WaitForUse"
+	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.gui_input.connect(func(event: InputEvent) -> void:
+		if event is InputEventMouseButton and event.is_pressed():
+			activate()
+	)
+	var center := CenterContainer.new()
+	overlay.add_child(center)
+	var box := VBoxContainer.new()
+	center.add_child(box)
+	var label := Label.new()
+	label.text = "The asset library loads when you use it."
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(label)
+	var button := Button.new()
+	button.text = "Load library"
+	button.pressed.connect(activate)
+	box.add_child(button)
+	return overlay
 
 ## The plugin fills the main screen the way 2D/3D/Script do, so it should sit
 ## as flush to the edges as they do. interface/theme/base_spacing is the
@@ -151,6 +205,7 @@ func _shortcut_input(event: InputEvent) -> void:
 	if key == null or not key.pressed:
 		return
 	if key.keycode == KEY_F and (key.ctrl_pressed or key.meta_pressed):
+		activate()
 		toolbar.focus_search_and_select()
 		get_viewport().set_input_as_handled()
 
@@ -198,7 +253,14 @@ func _restore_folder() -> void:
 ## files. Used by the sidebar, by Add, and by the FileSystem dock's Send to
 ## Asset Manager, which only need the folder that just changed looked at.
 func rescan_folder(path: String) -> void:
-	if _catalog == null or _catalog.IsScanning or _scan_starting:
+	if not _catalog_open:
+		# Sent from the FileSystem dock before the tab was ever shown, or while
+		# the catalog is still loading: scan once it is open.
+		if not _pending_rescans.has(path):
+			_pending_rescans.append(path)
+		activate()
+		return
+	if _catalog.IsScanning or _scan_starting:
 		return
 
 	# Set across the material step below, which yields frames before the
@@ -249,6 +311,19 @@ func _on_scan_finished(added: int, changed: int, removed: int, total: int, cance
 			% [failed_folders.size(), "\n  ".join(shown), "\n  ..." if failed_folders.size() > shown.size() else ""])
 	if added + changed + removed + retagged > 0:
 		_refresh_all_after_index_change()
+	_run_next_pending_rescan()
+
+## One scan runs at a time, so folders that waited for the catalog to open are
+## scanned one after another, each when the previous one finishes.
+func _run_next_pending_rescan() -> void:
+	if _pending_rescans.is_empty() or not _catalog_open:
+		return
+	# A scan still running keeps the queue; its ScanFinished comes back here.
+	if _catalog.IsScanning or _scan_starting:
+		return
+	var path := _pending_rescans[0]
+	_pending_rescans.remove_at(0)
+	rescan_folder(path)
 
 ## Runs `work` on the WorkerThreadPool and yields frames until it is done.
 func _run_off_main_thread(work: Callable) -> void:
@@ -407,6 +482,7 @@ func _on_switch_workspace() -> void:
 	current_workspace_path = ""
 	current_selected_path = ""
 	_close_catalog()
+	_pending_rescans.clear()
 
 	_sidebar.active_folder_prefix = ""
 	_sidebar.active_type_id = ""
@@ -453,11 +529,17 @@ func _on_workspace_opened(path: String) -> void:
 ## the background, so it starts straight away rather than waiting to be asked.
 func _on_catalog_opened(count: int, needs_scan: bool) -> void:
 	print("AssetManager: workspace opened, %d assets%s" % [count, ", scanning" if needs_scan else ""])
+	_catalog_open = true
 	_refresh_all_after_index_change()
 	if needs_scan:
+		# The whole workspace covers every folder that was waiting.
+		_pending_rescans.clear()
 		rescan_folder(current_workspace_path)
+	else:
+		_run_next_pending_rescan()
 
 func _close_catalog() -> void:
+	_catalog_open = false
 	if _catalog != null:
 		_catalog.Shutdown()
 	_catalog = null
