@@ -6,7 +6,7 @@ extends RefCounted
 ## repoints the references afterwards. Works in either direction.
 
 const REFERENCING_EXTENSIONS: PackedStringArray = ["tscn", "tres", "material", "mesh", "res", "gd", "gltf", "fbx"]
-const REWRITABLE_EXTENSIONS: PackedStringArray = ["tscn", "tres", "gd", "gltf"]
+const REWRITABLE_EXTENSIONS: PackedStringArray = ["tscn", "tres", "gd"]
 
 ## A res:// literal in a script is only followed when it names something we'd
 ## treat as an asset. A .cfg or .json is as likely to be written at runtime as
@@ -144,9 +144,12 @@ static func _collect_gltf_dependencies(file_path: String, pack_root: String, pac
 			continue
 		copy_map[dep_source] = _mirrored_dest(dep_source, pack_root, pack_dest_root)
 
+## An FBX names its textures in binary, so ModelLoader's locator finds them.
+## Each lands on its mirrored path like every other dependency: distinct
+## sources keep distinct destinations, a texture shared with a .gltf or a
+## scene stays at the path they name, and a relative reference inside the pack
+## still points at the copy, which is where Godot's FBX importer looks for it.
 static func _collect_fbx_dependencies(file_path: String, pack_root: String, pack_dest_root: String, copy_map: Dictionary) -> void:
-	var fbx_dest := str(copy_map.get(file_path, _mirrored_dest(file_path, pack_root, pack_dest_root)))
-	var textures_dir := fbx_dest.get_base_dir().path_join("textures")
 	# ASSUMPTION: the locator searches the model's own pack (TextureLocator.
 	# PackRootFor), not the walker's pack_root, which on ingest is the whole
 	# project and would let a fallback match pick another pack's texture. A
@@ -154,14 +157,16 @@ static func _collect_fbx_dependencies(file_path: String, pack_root: String, pack
 	# that pack is not found yet; Godot's own subfolder walk would find it.
 	# A fallback match (a .psd that never shipped) is copied but not linked to
 	# its materials; only FbxExport, on Send to Project of the model, links it.
-	# A texture lands off its mirrored path here, so a .gltf that shares it is
-	# repointed by rewrite_dependencies. Whichever model is walked first places
-	# a shared texture; a later FBX finds it at that place by its own search.
 	for entry: Dictionary in ModelLoader.resolved_textures(file_path):
 		var dep_source: String = entry["path"]
 		if copy_map.has(dep_source):
 			continue
-		copy_map[dep_source] = textures_dir.path_join(dep_source.get_file())
+		# Only a relative reference that climbs out of the pack resolves
+		# outside it, and such a file has no mirrored path.
+		if not dep_source.begins_with(pack_root.rstrip("/") + "/"):
+			push_warning("AssetManager: FBX texture outside the pack, not copied: " + dep_source)
+			continue
+		copy_map[dep_source] = _mirrored_dest(dep_source, pack_root, pack_dest_root)
 
 ## Binary resources can reference other files too, but their paths are in
 ## compressed bytes, so nothing nested under one is discoverable here. They're
@@ -356,8 +361,7 @@ static func _mirrored_dest(dep_source: String, pack_root: String, pack_dest_root
 	return pack_dest_root.path_join(relative)
 
 ## Rewrites each copied .tscn/.tres so ext_resource paths point at the
-## exported files, and each copied .gltf so its image and buffer URIs do.
-## Also strips the uid= attribute: it's the pack author's,
+## exported files. Also strips the uid= attribute: it's the pack author's,
 ## refers to nothing in this project, and Godot resolves uid before path,
 ## leaving it in would re-break a reference we just fixed.
 ## path_map says what each copied file should now be called from inside the
@@ -396,9 +400,6 @@ static func _rewrite_text(text: String, dep_source: String, pack_root: String, c
 
 	if dep_source.get_extension().to_lower() == "gd":
 		return _rewrite_script_text(text, base_dir, pack_root, copy_map, path_map)
-
-	if dep_source.get_extension().to_lower() == "gltf":
-		return _rewrite_gltf_text(text, dep_source, copy_map)
 
 	var regex := RegEx.new()
 	regex.compile('\\[ext_resource[^\\]]*\\]')
@@ -451,50 +452,6 @@ static func _rewrite_script_text(text: String, base_dir: String, pack_root: Stri
 		var new_dir := copied.get_base_dir() + "/"
 		out = out.replace('"' + raw_dir + '"', '"' + new_dir + '"')
 	return out
-
-## A .gltf names its images and buffers by URIs relative to itself, which
-## stay right only while each one lands on its mirrored path. One that landed
-## elsewhere (an FBX walked first put a shared texture in its textures/
-## folder) gets the relative path from the copied .gltf to its copy. The URIs
-## are read the way ModelsExportHandler.discover_gltf_dependencies reads them,
-## and only the matched string changes, so the rest of the JSON keeps its form.
-static func _rewrite_gltf_text(text: String, dep_source: String, copy_map: Dictionary) -> String:
-	var gltf_dest_dir := str(copy_map[dep_source]).get_base_dir()
-	var regex := RegEx.new()
-	regex.compile('"uri"\\s*:\\s*"([^"]*)"')
-	var matches := regex.search_all(text)
-	var out := text
-	for i in range(matches.size() - 1, -1, -1):
-		var m: RegExMatch = matches[i]
-		var uri := m.get_string(1)
-		if uri.begins_with("data:"):
-			continue
-		var decoded := uri.uri_file_decode().replace("\\", "/")
-		var resolved := dep_source.get_base_dir().path_join(decoded).simplify_path()
-		if not copy_map.has(resolved):
-			continue
-		var copy := str(copy_map[resolved])
-		if gltf_dest_dir.path_join(decoded).simplify_path() == copy:
-			continue
-		var encoded := PackedStringArray()
-		for segment in _relative_parts(gltf_dest_dir, copy):
-			encoded.append(segment.uri_encode())
-		out = out.substr(0, m.get_start(1)) + "/".join(encoded) + out.substr(m.get_end(1))
-	return out
-
-## The path segments leading from `from_dir` to `to_file`. Both are copy_map
-## destinations, so they share a root (a drive, res:// or the workspace).
-static func _relative_parts(from_dir: String, to_file: String) -> PackedStringArray:
-	var from_parts := from_dir.simplify_path().split("/", false)
-	var to_parts := to_file.simplify_path().split("/", false)
-	var shared := 0
-	while shared < from_parts.size() and shared < to_parts.size() - 1 and from_parts[shared] == to_parts[shared]:
-		shared += 1
-	var parts := PackedStringArray()
-	for i in range(shared, from_parts.size()):
-		parts.append("..")
-	parts.append_array(to_parts.slice(shared))
-	return parts
 
 static func _read_script_res_paths_in(text: String) -> PackedStringArray:
 	var paths := PackedStringArray()
