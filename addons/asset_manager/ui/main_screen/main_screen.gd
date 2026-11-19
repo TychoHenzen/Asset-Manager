@@ -122,8 +122,8 @@ func _ready() -> void:
 	_preview.setup(_settings)
 
 ## Opens the remembered workspace (or shows the picker) the first time the
-## library is needed: the tab being shown, or a file sent from the FileSystem
-## dock. Later calls do nothing.
+## library is used: Load library, a click on the panel, Ctrl+F, or a file sent
+## from the FileSystem dock. Showing the tab is not use. Later calls do nothing.
 func activate() -> void:
 	if _activated:
 		return
@@ -133,9 +133,9 @@ func activate() -> void:
 		_wait_overlay = null
 	_init_workspace_picker()
 
-## Shows the tab without loading the library: the editor restored it at start,
-## before anyone used it. A click on the panel, Load library, Ctrl+F or a
-## folder sent from the FileSystem dock loads it.
+## Covers the tab with the Load library panel while the library is not loaded,
+## so showing the tab, on start or later, loads nothing. A click on the panel,
+## Load library, Ctrl+F or a folder sent from the FileSystem dock loads it.
 func wait_for_use() -> void:
 	if _activated or _wait_overlay != null:
 		return
@@ -254,7 +254,7 @@ func _restore_folder() -> void:
 ## Asset Manager, which only need the folder that just changed looked at.
 func rescan_folder(path: String) -> void:
 	if not _catalog_open:
-		# Sent from the FileSystem dock before the tab was ever shown, or while
+		# Sent from the FileSystem dock before the library was loaded, or while
 		# the catalog is still loading: scan once it is open.
 		if not _pending_rescans.has(path):
 			_pending_rescans.append(path)
