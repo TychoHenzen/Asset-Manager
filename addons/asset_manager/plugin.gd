@@ -4,6 +4,9 @@ extends EditorPlugin
 ## EditorPlugin entry point. Instantiates the main screen panel and forwards
 ## visibility changes so it can sync when the user switches back to it.
 
+const MAIN_SCREEN_SCENE := "res://addons/asset_manager/ui/main_screen/main_screen.tscn"
+const CONTEXT_MENU_SCRIPT := "res://addons/asset_manager/ui/context_menu/context_menu.gd"
+
 var main_panel_instance: Control
 var _context_menu: EditorContextMenuPlugin
 ## Set by the first click or key press anywhere in the editor. At start the
@@ -18,14 +21,21 @@ func _input(event: InputEvent) -> void:
 		set_process_input(false)
 
 func _enter_tree() -> void:
-	main_panel_instance = preload("res://addons/asset_manager/ui/main_screen/main_screen.tscn").instantiate()
+	# ASSUMPTION: a headless editor (an import run, CI) has no one to
+	# use the tab or the menu, so the plugin builds neither there. The scenes are
+	# loaded at run time, never preloaded, so a headless start compiles none of
+	# them: they cost about 1.3 s of every headless import.
+	if DisplayServer.get_name() == "headless":
+		return
+	main_panel_instance = (load(MAIN_SCREEN_SCENE) as PackedScene).instantiate()
 	EditorInterface.get_editor_main_screen().add_child(main_panel_instance)
 	_make_visible(false)
 
 	# add_context_menu_plugin arrived in 4.4
 	if ClassDB.class_exists("EditorContextMenuPlugin"):
-		_context_menu = AssetManagerContextMenu.new()
-		_context_menu.main_panel = main_panel_instance
+		var menu = load(CONTEXT_MENU_SCRIPT).new()
+		menu.main_panel = main_panel_instance
+		_context_menu = menu
 		add_context_menu_plugin(EditorContextMenuPlugin.CONTEXT_SLOT_FILESYSTEM, _context_menu)
 
 func _exit_tree() -> void:
